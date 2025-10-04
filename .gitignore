@@ -22,3 +22,9 @@ target
 
 # 1BRC
 measurements.txt
+baseline.txt
+
+
+# Added by cargo
+
+/target

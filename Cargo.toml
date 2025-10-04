@@ -1,0 +1,21 @@
+[profile.max]
+inherits = "release"
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.bench]
+inherits = "max"
+debug = true
+strip = false
+
+[package]
+name = "one-billion-row-challange"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jemallocator = "0.5.4"
+libc = "0.2.175"
+memchr = "2.7.6"
+rustc-hash = "2.1.1"
