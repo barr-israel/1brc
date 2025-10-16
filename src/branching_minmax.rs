@@ -66,7 +66,11 @@ fn parse_measurement(mut text: &[u8]) -> i32 {
     let ones = (text[text.len() - 3]) as i32;
     let tenths = (text[text.len() - 1]) as i32;
     let abs_val = tens * 100 + ones * 10 + tenths - 111 * b'0' as i32;
-    if negative { -abs_val } else { abs_val }
+    if negative {
+        -abs_val
+    } else {
+        abs_val
+    }
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {

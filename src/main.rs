@@ -1,8 +1,8 @@
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-mod final_single_thread;
+mod private_hashmaps;
 
 fn main() {
-    final_single_thread::run();
+    private_hashmaps::run();
 }

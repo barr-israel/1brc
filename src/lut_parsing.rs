@@ -1,10 +1,9 @@
-use std::hint::assert_unchecked;
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
-use std::arch::x86_64::__m256i;
-use std::arch::x86_64::_mm256_cmpeq_epi8;
-use std::arch::x86_64::_mm256_loadu_si256;
-use std::arch::x86_64::_mm256_movemask_epi8;
+use std::arch::x86_64::{
+    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
+    _pext_u32,
+};
 
 use rustc_hash::FxHashMap;
 
@@ -56,17 +55,28 @@ impl From<StationName> for String {
     }
 }
 
-fn parse_measurement(mut text: &[u8]) -> i32 {
-    unsafe { assert_unchecked(text.len() >= 3) };
-    let negative = text[0] == b'-';
-    if negative {
-        text = &text[1..];
-    }
-    unsafe { assert_unchecked(text.len() >= 3) };
-    let tens = [b'0', (text[0])][(text.len() > 3) as usize] as i32;
-    let ones = (text[text.len() - 3]) as i32;
-    let tenths = (text[text.len() - 1]) as i32;
-    let abs_val = tens * 100 + ones * 10 + tenths - 111 * b'0' as i32;
+fn parse_measurement(text: &[u8]) -> i32 {
+    static LUT: [i16; 1 << 16] = {
+        let mut lut = [0; 1 << 16];
+        let mut i = 0usize;
+        while i < (1 << 16) {
+            let digit0 = i as i16 & 0xf;
+            let digit1 = (i >> 4) as i16 & 0xf;
+            let digit2 = (i >> 8) as i16 & 0xf;
+            let digit3 = (i >> 12) as i16 & 0xf;
+            lut[i] = if digit1 == b'.' as i16 & 0xf {
+                digit0 * 10 + digit2
+            } else {
+                digit0 * 100 + digit1 * 10 + digit3
+            };
+            i += 1;
+        }
+        lut
+    };
+    let negative = unsafe { *text.get_unchecked(0) } == b'-';
+    let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
+    let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
+    let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
     if negative {
         -abs_val
     } else {
@@ -97,30 +107,25 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
 fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
-    use std::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_set1_epi8};
-
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
     let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
-    let line: __m256i = unsafe {
-        use std::arch::x86_64::_mm256_loadu_si256;
-        _mm256_loadu_si256(text.as_ptr() as *const __m256i)
-    };
+    let line: __m256i = unsafe { _mm256_loadu_si256(text.as_ptr() as *const __m256i) };
     let separator_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, separator));
     let line_break_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break));
     let separator_pos = separator_mask.trailing_zeros() as usize;
     let line_break_pos = line_break_mask.trailing_zeros() as usize;
     (
-        &text[line_break_pos + 1..],
+        unsafe { text.get_unchecked(line_break_pos + 1..) },
         StationName {
             ptr: text.as_ptr(),
             len: separator_pos as u8,
         },
-        parse_measurement(&text[separator_pos + 1..line_break_pos]),
+        parse_measurement(unsafe { text.get_unchecked(separator_pos + 1..) }),
     )
 }
 
 #[cfg(not(target_feature = "avx2"))]
-fn read_line(mut text: &[u8]) -> (&[u8], &[u8], &[u8]) {
+fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     let station_name_slice: &[u8];
     let measurement_slice: &[u8];
     (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
@@ -128,12 +133,12 @@ fn read_line(mut text: &[u8]) -> (&[u8], &[u8], &[u8]) {
     (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
     text = &text[1..]; //skip \n;
     (
-        &text[line_break_pos + 1..],
+        text,
         StationName {
-            ptr: text.as_ptr(),
-            len: separator_pos as u8,
+            ptr: station_name_slice.as_ptr(),
+            len: station_name_slice.len() as u8,
         },
-        parse_measurement(&text[separator_pos + 1..line_break_pos]),
+        parse_measurement(measurement_slice),
     )
 }
 
@@ -152,9 +157,13 @@ pub fn run() {
         summary
             .entry(station_name)
             .and_modify(|(min, sum, max, count)| {
-                *min = (*min).min(measurement);
+                if measurement < *min {
+                    *min = measurement;
+                }
+                if measurement > *max {
+                    *max = measurement;
+                }
                 *sum += measurement;
-                *max = (*max).max(measurement);
                 *count += 1;
             })
             .or_insert((measurement, measurement, measurement, 1));

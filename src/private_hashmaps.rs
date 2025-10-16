@@ -6,6 +6,7 @@ use std::arch::x86_64::{
     _pext_u32,
 };
 
+use memchr::memrchr;
 use rustc_hash::FxHashMap;
 
 #[allow(unused_imports)]
@@ -16,6 +17,8 @@ struct StationName {
     ptr: *const u8,
     len: u8,
 }
+
+unsafe impl Send for StationName {}
 
 impl StationName {
     #[cfg(target_feature = "avx2")]
@@ -78,11 +81,7 @@ fn parse_measurement(text: &[u8]) -> i32 {
     let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
     let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
     let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
-    if negative {
-        -abs_val
-    } else {
-        abs_val
-    }
+    if negative { -abs_val } else { abs_val }
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {
@@ -143,14 +142,12 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     )
 }
 
-pub fn run() {
-    let file = File::open("measurements.txt").expect("measurements.txt file not found");
+fn process_chunk(chunk: &[u8]) -> FxHashMap<StationName, (i32, i32, i32, i32)> {
     let mut summary = FxHashMap::<StationName, (i32, i32, i32, i32)>::with_capacity_and_hasher(
         1024,
         Default::default(),
     );
-    let mapped_file = map_file(&file).unwrap();
-    let mut remainder = mapped_file;
+    let mut remainder = chunk;
     while (remainder.len() - 32) != 0 {
         let station_name: StationName;
         let measurement: i32;
@@ -169,23 +166,72 @@ pub fn run() {
             })
             .or_insert((measurement, measurement, measurement, 1));
     }
-    let mut summary: Vec<(String, f32, f32, f32)> = summary
-        .into_iter()
-        .map(|(station_name, (min, sum, max, count))| {
-            (
-                station_name.into(),
-                min as f32 / 10f32,
-                sum as f32 / (count as f32 * 10f32),
-                max as f32 / 10f32,
-            )
-        })
-        .collect();
-    summary.sort_unstable_by(|m1, m2| m1.0.cmp(&m2.0));
-    let mut out = std::io::stdout().lock();
-    let _ = out.write_all(b"{");
-    for (station_name, min, avg, max) in summary[..summary.len() - 1].iter() {
-        let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}, "));
-    }
-    let (station_name, min, avg, max) = summary.last().unwrap();
-    let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
+    summary
+}
+
+fn merge_summaries(
+    summary: &mut FxHashMap<StationName, (i32, i32, i32, i32)>,
+    partial_summary: FxHashMap<StationName, (i32, i32, i32, i32)>,
+) {
+    partial_summary.into_iter().for_each(
+        |(station_name, (partial_min, partial_sum, partial_max, partial_count))| {
+            summary
+                .entry(station_name)
+                .and_modify(|(min, sum, max, count)| {
+                    if partial_min < *min {
+                        *min = partial_min;
+                    }
+                    if partial_max > *max {
+                        *max = partial_max;
+                    }
+                    *sum += partial_sum;
+                    *count += partial_count;
+                })
+                .or_insert((partial_min, partial_sum, partial_max, partial_count));
+        },
+    );
+}
+
+pub fn run() {
+    let file = File::open("measurements.txt").expect("measurements.txt file not found");
+    let mapped_file = map_file(&file).unwrap();
+    let thread_count: usize = std::env::args()
+        .nth(1)
+        .expect("missing thread count")
+        .parse()
+        .expect("invalid thread count");
+    let ideal_chunk_size = mapped_file.len() / thread_count;
+    let mut remainder = mapped_file;
+    std::thread::scope(|scope| {
+        let mut threads = Vec::with_capacity(thread_count);
+        for _ in 0..thread_count - 1 {
+            let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
+            let chunk: &[u8] = &remainder[..chunk_end + 33];
+            remainder = &remainder[chunk_end + 1..];
+            threads.push(scope.spawn(|| process_chunk(chunk)));
+        }
+        let mut summary = process_chunk(remainder);
+        for t in threads {
+            merge_summaries(&mut summary, t.join().unwrap());
+        }
+        let mut summary: Vec<(String, f32, f32, f32)> = summary
+            .into_iter()
+            .map(|(station_name, (min, sum, max, count))| {
+                (
+                    station_name.into(),
+                    min as f32 / 10f32,
+                    sum as f32 / (count as f32 * 10f32),
+                    max as f32 / 10f32,
+                )
+            })
+            .collect();
+        summary.sort_unstable_by(|m1, m2| m1.0.cmp(&m2.0));
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(b"{");
+        for (station_name, min, avg, max) in summary[..summary.len() - 1].iter() {
+            let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}, "));
+        }
+        let (station_name, min, avg, max) = summary.last().unwrap();
+        let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
+    });
 }

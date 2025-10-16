@@ -1,11 +1,13 @@
-use std::hint::assert_unchecked;
+use std::io::Write;
+use std::sync::Mutex;
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
-use std::arch::x86_64::__m256i;
-use std::arch::x86_64::_mm256_cmpeq_epi8;
-use std::arch::x86_64::_mm256_loadu_si256;
-use std::arch::x86_64::_mm256_movemask_epi8;
+use std::arch::x86_64::{
+    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
+    _pext_u32,
+};
 
+use memchr::memrchr;
 use rustc_hash::FxHashMap;
 
 #[allow(unused_imports)]
@@ -16,6 +18,8 @@ struct StationName {
     ptr: *const u8,
     len: u8,
 }
+
+unsafe impl Send for StationName {}
 
 impl StationName {
     #[cfg(target_feature = "avx2")]
@@ -56,22 +60,29 @@ impl From<StationName> for String {
     }
 }
 
-fn parse_measurement(mut text: &[u8]) -> i32 {
-    unsafe { assert_unchecked(text.len() >= 3) };
-    let negative = text[0] == b'-';
-    if negative {
-        text = &text[1..];
-    }
-    unsafe { assert_unchecked(text.len() >= 3) };
-    let tens = [b'0', (text[0])][(text.len() > 3) as usize] as i32;
-    let ones = (text[text.len() - 3]) as i32;
-    let tenths = (text[text.len() - 1]) as i32;
-    let abs_val = tens * 100 + ones * 10 + tenths - 111 * b'0' as i32;
-    if negative {
-        -abs_val
-    } else {
-        abs_val
-    }
+fn parse_measurement(text: &[u8]) -> i32 {
+    static LUT: [i16; 1 << 16] = {
+        let mut lut = [0; 1 << 16];
+        let mut i = 0usize;
+        while i < (1 << 16) {
+            let digit0 = i as i16 & 0xf;
+            let digit1 = (i >> 4) as i16 & 0xf;
+            let digit2 = (i >> 8) as i16 & 0xf;
+            let digit3 = (i >> 12) as i16 & 0xf;
+            lut[i] = if digit1 == b'.' as i16 & 0xf {
+                digit0 * 10 + digit2
+            } else {
+                digit0 * 100 + digit1 * 10 + digit3
+            };
+            i += 1;
+        }
+        lut
+    };
+    let negative = unsafe { *text.get_unchecked(0) } == b'-';
+    let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
+    let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
+    let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
+    if negative { -abs_val } else { abs_val }
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {
@@ -97,14 +108,9 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
 fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
-    use std::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_set1_epi8};
-
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
     let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
-    let line: __m256i = unsafe {
-        use std::arch::x86_64::_mm256_loadu_si256;
-        _mm256_loadu_si256(text.as_ptr() as *const __m256i)
-    };
+    let line: __m256i = unsafe { _mm256_loadu_si256(text.as_ptr() as *const __m256i) };
     let separator_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, separator));
     let line_break_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break));
     let separator_pos = separator_mask.trailing_zeros() as usize;
@@ -120,7 +126,7 @@ fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
 }
 
 #[cfg(not(target_feature = "avx2"))]
-fn read_line(mut text: &[u8]) -> (&[u8], &[u8], &[u8]) {
+fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     let station_name_slice: &[u8];
     let measurement_slice: &[u8];
     (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
@@ -128,38 +134,67 @@ fn read_line(mut text: &[u8]) -> (&[u8], &[u8], &[u8]) {
     (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
     text = &text[1..]; //skip \n;
     (
-        &text[line_break_pos + 1..],
+        text,
         StationName {
-            ptr: text.as_ptr(),
-            len: separator_pos as u8,
+            ptr: station_name_slice.as_ptr(),
+            len: station_name_slice.len() as u8,
         },
-        parse_measurement(&text[separator_pos + 1..line_break_pos]),
+        parse_measurement(measurement_slice),
     )
 }
 
-pub fn run() {
-    let file = File::open("measurements.txt").expect("measurements.txt file not found");
-    let mut summary = FxHashMap::<StationName, (i32, i32, i32, i32)>::with_capacity_and_hasher(
-        1024,
-        Default::default(),
-    );
-    let mapped_file = map_file(&file).unwrap();
-    let mut remainder = mapped_file;
+fn process_chunk(chunk: &[u8], summary: &Mutex<FxHashMap<StationName, (i32, i32, i32, i32)>>) {
+    let mut remainder = chunk;
     while (remainder.len() - 32) != 0 {
         let station_name: StationName;
         let measurement: i32;
         (remainder, station_name, measurement) = unsafe { read_line(remainder) };
         summary
+            .lock()
+            .unwrap()
             .entry(station_name)
             .and_modify(|(min, sum, max, count)| {
-                *min = (*min).min(measurement);
+                if measurement < *min {
+                    *min = measurement;
+                }
+                if measurement > *max {
+                    *max = measurement;
+                }
                 *sum += measurement;
-                *max = (*max).max(measurement);
                 *count += 1;
             })
             .or_insert((measurement, measurement, measurement, 1));
     }
+}
+
+pub fn run() {
+    let file = File::open("measurements.txt").expect("measurements.txt file not found");
+    let summary = Mutex::new(
+        FxHashMap::<StationName, (i32, i32, i32, i32)>::with_capacity_and_hasher(
+            1024,
+            Default::default(),
+        ),
+    );
+    let mapped_file = map_file(&file).unwrap();
+    let thread_count: usize = std::env::args()
+        .nth(1)
+        .expect("missing thread count")
+        .parse()
+        .expect("invalid thread count");
+    let ideal_chunk_size = mapped_file.len() / thread_count;
+    let mut remainder = mapped_file;
+    std::thread::scope(|scope| {
+        for _ in 0..thread_count - 1 {
+            let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
+            let chunk: &[u8] = &remainder[..chunk_end + 33];
+            remainder = &remainder[chunk_end + 1..];
+            scope.spawn(|| process_chunk(chunk, &summary));
+        }
+        process_chunk(remainder, &summary);
+    });
     let mut summary: Vec<(String, f32, f32, f32)> = summary
+        .into_inner()
+        .unwrap()
         .into_iter()
         .map(|(station_name, (min, sum, max, count))| {
             (
@@ -171,10 +206,11 @@ pub fn run() {
         })
         .collect();
     summary.sort_unstable_by(|m1, m2| m1.0.cmp(&m2.0));
-    print!("{{");
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(b"{");
     for (station_name, min, avg, max) in summary[..summary.len() - 1].iter() {
-        print!("{station_name}={min:.1}/{avg:.1}/{max:.1}, ");
+        let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}, "));
     }
     let (station_name, min, avg, max) = summary.last().unwrap();
-    print!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}");
+    let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
 }
