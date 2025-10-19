@@ -83,7 +83,11 @@ fn parse_measurement(text: &[u8]) -> i32 {
     let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
     let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
     let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
-    if negative { -abs_val } else { abs_val }
+    if negative {
+        -abs_val
+    } else {
+        abs_val
+    }
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {

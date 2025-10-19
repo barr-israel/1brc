@@ -3,8 +3,8 @@ use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_part
 
 use rustc_hash::FxHashMap;
 use std::arch::x86_64::{
-    __m128i, __m256i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
-    _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _pext_u32,
+    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
+    _pext_u32,
 };
 
 #[allow(unused_imports)]
@@ -109,22 +109,36 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
-fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
-    let station_name_slice: &[u8];
-    (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
-    text = &text[1..]; //skip ';';
-    let line_break: __m128i = _mm_set1_epi8(b'\n' as i8);
-    let line_remainder: __m128i = unsafe { _mm_loadu_si128(text.as_ptr() as *const __m128i) };
-    let line_break_mask = _mm_movemask_epi8(_mm_cmpeq_epi8(line_remainder, line_break));
-    let line_break_pos = line_break_mask.trailing_zeros() as usize;
-    (
-        &text[line_break_pos + 1..],
-        StationName {
-            ptr: station_name_slice.as_ptr(),
-            len: station_name_slice.len() as u8,
-        },
-        parse_measurement(&text[..line_break_pos]),
-    )
+fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
+    let seperator: __m256i = _mm256_set1_epi8(b';' as i8);
+    let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
+    let mut len = 0usize;
+    loop {
+        let line_remainder: __m256i =
+            unsafe { _mm256_loadu_si256(text.as_ptr().add(len) as *const __m256i) };
+        let seperator_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(seperator, line_remainder));
+        if seperator_mask == 0 {
+            len += 32;
+        } else {
+            let seperator_pos = seperator_mask.trailing_zeros() as usize;
+            if seperator_pos > 27 {
+                // line break potentially outside vector
+                unsafe { _mm256_loadu_si256(text.as_ptr().add(len) as *const __m256i) };
+            }
+            let line_break_mask =
+                _mm256_movemask_epi8(_mm256_cmpeq_epi8(line_remainder, line_break));
+            let line_break_pos = line_break_mask.trailing_zeros() as usize;
+            let search_end_ptr = &text[len..];
+            return (
+                &search_end_ptr[line_break_pos + 1..],
+                StationName {
+                    ptr: text.as_ptr(),
+                    len: len as u8 + seperator_pos as u8,
+                },
+                parse_measurement(&search_end_ptr[seperator_pos + 1..line_break_pos]),
+            );
+        }
+    }
 }
 
 #[cfg(not(target_feature = "avx2"))]
