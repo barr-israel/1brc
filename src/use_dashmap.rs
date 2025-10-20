@@ -13,6 +13,13 @@ use rustc_hash::FxBuildHasher;
 #[allow(unused_imports)]
 use memchr::memchr;
 
+struct StationEntry {
+    sum: i32,
+    min: i32,
+    max: i32,
+    count: i32,
+}
+
 #[derive(Eq)]
 struct StationName {
     ptr: *const u8,
@@ -83,11 +90,7 @@ fn parse_measurement(text: &[u8]) -> i32 {
     let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
     let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
     let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
-    if negative {
-        -abs_val
-    } else {
-        abs_val
-    }
+    if negative { -abs_val } else { abs_val }
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {
@@ -148,10 +151,7 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     )
 }
 
-fn process_chunk(
-    chunk: &[u8],
-    summary: &DashMap<StationName, (i32, i32, i32, i32), FxBuildHasher>,
-) {
+fn process_chunk(chunk: &[u8], summary: &DashMap<StationName, StationEntry, FxBuildHasher>) {
     let mut remainder = chunk;
     while (remainder.len() - 32) != 0 {
         let station_name: StationName;
@@ -159,27 +159,31 @@ fn process_chunk(
         (remainder, station_name, measurement) = unsafe { read_line(remainder) };
         summary
             .entry(station_name)
-            .and_modify(|(min, sum, max, count)| {
-                if measurement < *min {
-                    *min = measurement;
+            .and_modify(|e| {
+                if measurement < e.min {
+                    e.min = measurement;
                 }
-                if measurement > *max {
-                    *max = measurement;
+                if measurement > e.max {
+                    e.max = measurement;
                 }
-                *sum += measurement;
-                *count += 1;
+                e.sum += measurement;
+                e.count += 1;
             })
-            .or_insert((measurement, measurement, measurement, 1));
+            .or_insert(StationEntry {
+                sum: measurement,
+                min: measurement,
+                max: measurement,
+                count: 1,
+            });
     }
 }
 
 pub fn run() {
     let file = File::open("measurements.txt").expect("measurements.txt file not found");
-    let summary =
-        DashMap::<StationName, (i32, i32, i32, i32), FxBuildHasher>::with_capacity_and_hasher(
-            1024,
-            Default::default(),
-        );
+    let summary = DashMap::<StationName, StationEntry, FxBuildHasher>::with_capacity_and_hasher(
+        1024,
+        Default::default(),
+    );
     let mapped_file = map_file(&file).unwrap();
     let thread_count: usize = std::env::args()
         .nth(1)
@@ -199,12 +203,12 @@ pub fn run() {
     });
     let mut summary: Vec<(String, f32, f32, f32)> = summary
         .into_iter()
-        .map(|(station_name, (min, sum, max, count))| {
+        .map(|(station_name, e)| {
             (
                 station_name.into(),
-                min as f32 / 10f32,
-                sum as f32 / (count as f32 * 10f32),
-                max as f32 / 10f32,
+                e.min as f32 / 10f32,
+                e.sum as f32 / (e.count as f32 * 10f32),
+                e.max as f32 / 10f32,
             )
         })
         .collect();

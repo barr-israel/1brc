@@ -11,6 +11,13 @@ use rustc_hash::FxHashMap;
 #[allow(unused_imports)]
 use memchr::memchr;
 
+struct StationEntry {
+    sum: i32,
+    min: i32,
+    max: i32,
+    count: i32,
+}
+
 #[derive(Eq)]
 struct StationName {
     ptr: *const u8,
@@ -141,10 +148,8 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
 
 pub fn run() {
     let file = File::open("measurements.txt").expect("measurements.txt file not found");
-    let mut summary = FxHashMap::<StationName, (i32, i32, i32, i32)>::with_capacity_and_hasher(
-        1024,
-        Default::default(),
-    );
+    let mut summary =
+        FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
     let mapped_file = map_file(&file).unwrap();
     let mut remainder = mapped_file;
     while (remainder.len() - 32) != 0 {
@@ -153,26 +158,31 @@ pub fn run() {
         (remainder, station_name, measurement) = unsafe { read_line(remainder) };
         summary
             .entry(station_name)
-            .and_modify(|(min, sum, max, count)| {
-                if measurement < *min {
-                    *min = measurement;
+            .and_modify(|e| {
+                if measurement < e.min {
+                    e.min = measurement;
                 }
-                if measurement > *max {
-                    *max = measurement;
+                if measurement > e.max {
+                    e.max = measurement;
                 }
-                *sum += measurement;
-                *count += 1;
+                e.sum += measurement;
+                e.count += 1;
             })
-            .or_insert((measurement, measurement, measurement, 1));
+            .or_insert(StationEntry {
+                min: measurement,
+                max: measurement,
+                sum: measurement,
+                count: 1,
+            });
     }
     let mut summary: Vec<(String, f32, f32, f32)> = summary
         .into_iter()
-        .map(|(station_name, (min, sum, max, count))| {
+        .map(|(station_name, e)| {
             (
                 station_name.into(),
-                min as f32 / 10f32,
-                sum as f32 / (count as f32 * 10f32),
-                max as f32 / 10f32,
+                e.min as f32 / 10f32,
+                e.sum as f32 / (e.count as f32 * 10f32),
+                e.max as f32 / 10f32,
             )
         })
         .collect();

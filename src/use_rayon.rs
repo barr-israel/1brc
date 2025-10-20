@@ -1,6 +1,8 @@
 use std::io::Write;
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
+use rayon::iter::{ParallelBridge, ParallelIterator};
+
 use std::arch::x86_64::{
     __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
     _pext_u32,
@@ -25,6 +27,7 @@ struct StationName {
 }
 
 unsafe impl Send for StationName {}
+unsafe impl Sync for StationName {}
 
 impl StationName {
     #[cfg(target_feature = "avx2")]
@@ -179,13 +182,13 @@ fn process_chunk(chunk: &[u8]) -> FxHashMap<StationName, StationEntry> {
 }
 
 fn merge_summaries(
-    summary: &mut FxHashMap<StationName, StationEntry>,
-    partial_summary: FxHashMap<StationName, StationEntry>,
-) {
-    partial_summary
+    mut summary1: FxHashMap<StationName, StationEntry>,
+    summary2: FxHashMap<StationName, StationEntry>,
+) -> FxHashMap<StationName, StationEntry> {
+    summary2
         .into_iter()
         .for_each(|(station_name, partial_entry)| {
-            summary
+            summary1
                 .entry(station_name)
                 .and_modify(|entry| {
                     if partial_entry.min < entry.min {
@@ -199,6 +202,7 @@ fn merge_summaries(
                 })
                 .or_insert(partial_entry);
         });
+    summary1
 }
 
 pub fn run() {
@@ -209,38 +213,44 @@ pub fn run() {
         .expect("missing thread count")
         .parse()
         .expect("invalid thread count");
-    let ideal_chunk_size = mapped_file.len() / thread_count;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .build_global()
+        .unwrap();
+    let chunks_mult = 16;
+    let chunks = thread_count * chunks_mult;
+    let ideal_chunk_size = mapped_file.len() / chunks;
     let mut remainder = mapped_file;
-    std::thread::scope(|scope| {
-        let mut threads = Vec::with_capacity(thread_count);
-        for _ in 0..thread_count - 1 {
+    let summary: FxHashMap<StationName, StationEntry> = (0..chunks)
+        .map(|_| {
             let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
             let chunk: &[u8] = &remainder[..chunk_end + 33];
             remainder = &remainder[chunk_end + 1..];
-            threads.push(scope.spawn(|| process_chunk(chunk)));
-        }
-        let mut summary = process_chunk(remainder);
-        for t in threads {
-            merge_summaries(&mut summary, t.join().unwrap());
-        }
-        let mut summary: Vec<(String, f32, f32, f32)> = summary
-            .into_iter()
-            .map(|(station_name, e)| {
-                (
-                    station_name.into(),
-                    e.min as f32 / 10f32,
-                    e.sum as f32 / (e.count as f32 * 10f32),
-                    e.max as f32 / 10f32,
-                )
-            })
-            .collect();
-        summary.sort_unstable_by(|m1, m2| m1.0.cmp(&m2.0));
-        let mut out = std::io::stdout().lock();
-        let _ = out.write_all(b"{");
-        for (station_name, min, avg, max) in summary[..summary.len() - 1].iter() {
-            let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}, "));
-        }
-        let (station_name, min, avg, max) = summary.last().unwrap();
-        let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
-    });
+            chunk
+        })
+        .par_bridge()
+        .map(process_chunk)
+        .reduce(
+            FxHashMap::<StationName, StationEntry>::default,
+            merge_summaries,
+        );
+    let mut summary: Vec<(String, f32, f32, f32)> = summary
+        .into_iter()
+        .map(|(station_name, e)| {
+            (
+                station_name.into(),
+                e.min as f32 / 10f32,
+                e.sum as f32 / (e.count as f32 * 10f32),
+                e.max as f32 / 10f32,
+            )
+        })
+        .collect();
+    summary.sort_unstable_by(|m1, m2| m1.0.cmp(&m2.0));
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(b"{");
+    for (station_name, min, avg, max) in summary[..summary.len() - 1].iter() {
+        let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}, "));
+    }
+    let (station_name, min, avg, max) = summary.last().unwrap();
+    let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
 }
