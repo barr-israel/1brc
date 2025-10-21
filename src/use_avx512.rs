@@ -4,8 +4,9 @@ use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_part
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use std::arch::x86_64::{
-    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_mask_cmpneq_epu8_mask,
-    _mm256_movemask_epi8, _mm256_set1_epi8, _pext_u32,
+    __m256i, _mm256_cmpeq_epi8, _mm256_cmpneq_epu8_mask, _mm256_loadu_si256,
+    _mm256_mask_cmpneq_epu8_mask, _mm256_maskz_loadu_epi8, _mm256_movemask_epi8, _mm256_set1_epi8,
+    _pext_u32,
 };
 
 use memchr::memrchr;
@@ -37,10 +38,10 @@ impl StationName {
         if self.len != other.len {
             return false;
         }
-        let s = unsafe { _mm256_loadu_si256(self.ptr as *const __m256i) };
-        let o = unsafe { _mm256_loadu_si256(other.ptr as *const __m256i) };
         let mask = (1 << self.len.max(other.len)) - 1;
-        let diff = _mm256_mask_cmpneq_epu8_mask(mask, s, o);
+        let s = unsafe { _mm256_maskz_loadu_epi8(mask, self.ptr as *const i8) };
+        let o = unsafe { _mm256_maskz_loadu_epi8(mask, other.ptr as *const i8) };
+        let diff = _mm256_cmpneq_epu8_mask(s, o);
         diff == 0
     }
 }
