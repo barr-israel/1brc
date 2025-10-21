@@ -27,4 +27,5 @@ baseline.txt
 
 # Added by cargo
 
+Cargo.lock
 /target
