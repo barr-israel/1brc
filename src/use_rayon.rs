@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{PipeWriter, Write};
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
 use rayon::iter::{ParallelBridge, ParallelIterator};
@@ -205,7 +205,7 @@ fn merge_summaries(
     summary1
 }
 
-pub fn run() {
+pub fn run(mut writer: PipeWriter) {
     let thread_count: usize = std::env::args()
         .nth(1)
         .expect("missing thread count")
@@ -253,4 +253,6 @@ pub fn run() {
     }
     let (station_name, min, avg, max) = summary.last().unwrap();
     let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
+    _ = out.flush();
+    writer.write_all(&[0]).unwrap();
 }

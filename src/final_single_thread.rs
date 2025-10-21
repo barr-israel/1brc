@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{PipeWriter, Write};
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
 use std::arch::x86_64::{
@@ -146,7 +146,7 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     )
 }
 
-pub fn run() {
+pub fn run(mut writer: PipeWriter) {
     let file = File::open("measurements.txt").expect("measurements.txt file not found");
     let mut summary =
         FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
@@ -194,4 +194,6 @@ pub fn run() {
     }
     let (station_name, min, avg, max) = summary.last().unwrap();
     let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
+    _ = out.flush();
+    writer.write_all(&[0u8]).unwrap();
 }
