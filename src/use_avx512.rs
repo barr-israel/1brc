@@ -14,7 +14,7 @@ use rustc_hash::FxHashMap;
 #[allow(unused_imports)]
 use memchr::memchr;
 
-const MARGIN: usize = 64;
+const MARGIN: usize = 32;
 
 struct StationEntry {
     sum: i32,
