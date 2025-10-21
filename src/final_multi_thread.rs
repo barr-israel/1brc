@@ -128,6 +128,7 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
     }
 }
 
+#[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
 fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
@@ -144,6 +145,24 @@ fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
             len: separator_pos as u8,
         },
         parse_measurement(&text[separator_pos + 1..line_break_pos]),
+    )
+}
+
+#[cfg(not(target_feature = "avx2"))]
+fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
+    let station_name_slice: &[u8];
+    let measurement_slice: &[u8];
+    (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
+    text = &text[1..]; //skip ';';
+    (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
+    text = &text[1..]; //skip \n;
+    (
+        text,
+        StationName {
+            ptr: station_name_slice.as_ptr(),
+            len: station_name_slice.len() as u8,
+        },
+        parse_measurement(measurement_slice),
     )
 }
 
