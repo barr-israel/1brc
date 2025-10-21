@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{PipeWriter, Write};
 use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_parts, str::FromStr};
 
 use rayon::iter::{ParallelBridge, ParallelIterator};
@@ -13,6 +13,8 @@ use rustc_hash::FxHashMap;
 
 #[allow(unused_imports)]
 use memchr::memchr;
+
+const MARGIN: usize = 64;
 
 struct StationEntry {
     sum: i32,
@@ -87,7 +89,7 @@ fn parse_measurement(text: &[u8]) -> i32 {
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {
-    let mapped_length = file.metadata().unwrap().len() as usize + 32;
+    let mapped_length = file.metadata().unwrap().len() as usize + MARGIN;
     match unsafe {
         libc::mmap(
             std::ptr::null_mut(),
@@ -129,7 +131,7 @@ fn process_chunk(chunk: &[u8]) -> FxHashMap<StationName, StationEntry> {
     let mut summary =
         FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
     let mut remainder = chunk;
-    while (remainder.len() - 32) != 0 {
+    while (remainder.len() - MARGIN) != 0 {
         let station_name: StationName;
         let measurement: i32;
         (remainder, station_name, measurement) = unsafe { read_line(remainder) };
@@ -179,7 +181,7 @@ fn merge_summaries(
     summary1
 }
 
-pub fn run() {
+pub fn run(mut writer: PipeWriter) {
     let file = File::open("measurements.txt").expect("measurements.txt file not found");
     let mapped_file = map_file(&file).unwrap();
     let thread_count: usize = std::env::args()
@@ -198,7 +200,7 @@ pub fn run() {
     let summary: FxHashMap<StationName, StationEntry> = (0..chunks)
         .map(|_| {
             let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
-            let chunk: &[u8] = &remainder[..chunk_end + 33];
+            let chunk: &[u8] = &remainder[..chunk_end + MARGIN + 1];
             remainder = &remainder[chunk_end + 1..];
             chunk
         })
@@ -227,4 +229,6 @@ pub fn run() {
     }
     let (station_name, min, avg, max) = summary.last().unwrap();
     let _ = out.write_fmt(format_args!("{station_name}={min:.1}/{avg:.1}/{max:.1}}}"));
+    _ = out.flush();
+    writer.write_all(&[0]).unwrap();
 }
