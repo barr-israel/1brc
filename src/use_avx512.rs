@@ -4,8 +4,8 @@ use std::{fs::File, hash::Hash, io::Error, os::fd::AsRawFd, slice::from_raw_part
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use std::arch::x86_64::{
-    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
-    _pext_u32,
+    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_mask_cmpneq_epu8_mask,
+    _mm256_movemask_epi8, _mm256_set1_epi8, _pext_u32,
 };
 
 use memchr::memrchr;
@@ -30,23 +30,16 @@ unsafe impl Send for StationName {}
 unsafe impl Sync for StationName {}
 
 impl StationName {
-    #[cfg(target_feature = "avx2")]
-    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "avx512bw,avx512vl")]
     fn eq_inner(&self, other: &Self) -> bool {
         if self.len != other.len {
             return false;
         }
         let s = unsafe { _mm256_loadu_si256(self.ptr as *const __m256i) };
         let o = unsafe { _mm256_loadu_si256(other.ptr as *const __m256i) };
-        let mask = (1 << self.len) - 1;
-        let diff = _mm256_movemask_epi8(_mm256_cmpeq_epi8(s, o)) as u32;
-        diff & mask == mask
-    }
-    #[cfg(not(target_feature = "avx2"))]
-    fn eq_inner(&self, other: &Self) -> bool {
-        let self_slice = unsafe { from_raw_parts(self.ptr, self.len as usize) };
-        let other_slice = unsafe { from_raw_parts(other.ptr, other.len as usize) };
-        self_slice == other_slice
+        let mask = (1 << self.len.max(other.len)) - 1;
+        let diff = _mm256_mask_cmpneq_epu8_mask(mask, s, o);
+        diff == 0
     }
 }
 impl PartialEq for StationName {
@@ -113,7 +106,6 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
     }
 }
 
-#[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
 fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
@@ -130,24 +122,6 @@ fn read_line(text: &[u8]) -> (&[u8], StationName, i32) {
             len: separator_pos as u8,
         },
         parse_measurement(&text[separator_pos + 1..line_break_pos]),
-    )
-}
-
-#[cfg(not(target_feature = "avx2"))]
-fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
-    let station_name_slice: &[u8];
-    let measurement_slice: &[u8];
-    (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
-    text = &text[1..]; //skip ';';
-    (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
-    text = &text[1..]; //skip \n;
-    (
-        text,
-        StationName {
-            ptr: station_name_slice.as_ptr(),
-            len: station_name_slice.len() as u8,
-        },
-        parse_measurement(measurement_slice),
     )
 }
 
@@ -206,6 +180,8 @@ fn merge_summaries(
 }
 
 pub fn run() {
+    let file = File::open("measurements.txt").expect("measurements.txt file not found");
+    let mapped_file = map_file(&file).unwrap();
     let thread_count: usize = std::env::args()
         .nth(1)
         .expect("missing thread count")
@@ -215,8 +191,6 @@ pub fn run() {
         .num_threads(thread_count)
         .build_global()
         .unwrap();
-    let file = File::open("measurements.txt").expect("measurements.txt file not found");
-    let mapped_file = map_file(&file).unwrap();
     let chunks_mult = 16;
     let chunks = thread_count * chunks_mult;
     let ideal_chunk_size = mapped_file.len() / chunks;
