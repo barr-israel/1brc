@@ -1,5 +1,5 @@
 use std::{
-    arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8},
+    arch::x86_64::{__m256i, _mm256_loadu_si256},
     hash::{Hash, Hasher},
     mem::{MaybeUninit, transmute},
     ptr::null,
@@ -32,6 +32,8 @@ impl StationName {
     #[cfg(all(target_feature = "avx512bw", target_feature = "avx512vl"))]
     #[target_feature(enable = "avx512bw,avx512vl")]
     fn eq_inner(&self, other: &Self) -> bool {
+        use std::arch::x86_64::_mm256_mask_cmpneq_epu8_mask;
+
         if self.len != other.len {
             return false;
         }
@@ -44,6 +46,8 @@ impl StationName {
     #[cfg(all(target_feature = "avx2", not(target_feature = "avx512bw")))]
     #[target_feature(enable = "avx2")]
     fn eq_inner(&self, other: &Self) -> bool {
+        use std::arch::x86_64::{_mm256_cmpeq_epi8, _mm256_movemask_epi8};
+
         if self.len != other.len {
             return false;
         }
