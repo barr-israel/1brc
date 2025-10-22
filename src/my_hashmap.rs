@@ -1,5 +1,5 @@
 use std::{
-    arch::x86_64::_mm256_loadu_si256,
+    arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8},
     hash::{Hash, Hasher},
     mem::{MaybeUninit, transmute},
     ptr::null,
@@ -47,7 +47,6 @@ impl StationName {
         if self.len != other.len {
             return false;
         }
-        use std::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_movemask_epi8};
         let s = unsafe { _mm256_loadu_si256(self.ptr as *const __m256i) };
         let o = unsafe { _mm256_loadu_si256(other.ptr as *const __m256i) };
         let mask = (1 << self.len) - 1;
