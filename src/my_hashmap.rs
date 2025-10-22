@@ -1,6 +1,7 @@
 use std::{
     arch::x86_64::_mm256_loadu_si256,
     hash::{Hash, Hasher},
+    mem::{MaybeUninit, transmute},
     ptr::null,
     slice::from_raw_parts,
     str::FromStr,
@@ -78,6 +79,7 @@ impl From<StationName> for String {
         String::from_str(std::str::from_utf8(slice).unwrap()).unwrap()
     }
 }
+
 pub struct MyHashMap {
     names: Box<[StationName; SIZE]>,
     entries: Box<[StationEntry; SIZE]>,
@@ -88,24 +90,33 @@ impl MyHashMap {
         let mut names;
         let mut entries;
         unsafe {
-            names = Box::<[StationName; SIZE]>::new_uninit().assume_init();
-            entries = Box::<[StationEntry; SIZE]>::new_uninit().assume_init();
+            names = Box::<[MaybeUninit<StationName>; SIZE]>::new_uninit().assume_init();
+            entries = Box::<[MaybeUninit<StationEntry>; SIZE]>::new_uninit().assume_init();
         }
         for name in names.iter_mut() {
-            *name = StationName {
+            name.write(StationName {
                 ptr: null(),
                 len: 0,
-            };
+            });
         }
         for entry in entries.iter_mut() {
-            *entry = StationEntry {
+            entry.write(StationEntry {
                 min: 1000,
                 max: -1000,
                 sum: 0,
                 count: 0,
-            };
+            });
         }
-        MyHashMap { names, entries }
+        MyHashMap {
+            names: unsafe {
+                transmute::<Box<[MaybeUninit<StationName>; SIZE]>, Box<[StationName; SIZE]>>(names)
+            },
+            entries: unsafe {
+                transmute::<Box<[MaybeUninit<StationEntry>; SIZE]>, Box<[StationEntry; SIZE]>>(
+                    entries,
+                )
+            },
+        }
     }
 
     pub fn insert_measurement(&mut self, name: StationName, measurement: i32) {
