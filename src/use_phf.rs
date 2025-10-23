@@ -18,7 +18,7 @@ use crate::my_phf::MyPHFMap;
 
 const MARGIN: usize = 32;
 
-fn parse_measurement(text: *const u8) -> i32 {
+fn parse_measurement(text: &[u8]) -> i32 {
     static LUT: [i16; 1 << 16] = {
         let mut lut = [0; 1 << 16];
         let mut i = 0usize;
@@ -36,8 +36,8 @@ fn parse_measurement(text: *const u8) -> i32 {
         }
         lut
     };
-    let negative = unsafe { text.read() } == b'-';
-    let raw_key = unsafe { (text.add(negative as usize) as *const u32).read_unaligned() };
+    let negative = unsafe { *text.get_unchecked(0) } == b'-';
+    let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
     let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
     let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
     if negative { -abs_val } else { abs_val }
@@ -77,7 +77,7 @@ fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
         (
             text.get_unchecked(line_break_pos + 1..),
             text.get_unchecked(..separator_pos),
-            parse_measurement(text.as_ptr().add(separator_pos + 1)),
+            parse_measurement(&text[separator_pos + 1..line_break_pos]),
         )
     }
 }
