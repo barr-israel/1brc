@@ -1,11 +1,15 @@
 use std::{
+    hash::{Hash, Hasher},
     io::Write,
     mem::{MaybeUninit, transmute},
 };
 
+use rustc_hash::FxHasher;
+
 use crate::station_names::STATION_NAMES;
 
-const SIZE: usize = 13779;
+const SIZE: usize = 7088;
+const SEED: usize = 1339;
 
 pub struct StationEntry {
     pub sum: i32,
@@ -32,7 +36,10 @@ fn get_name_index(name: &[u8]) -> usize {
     let to_mask = len * 8;
     let mask = u64::MAX >> (64 - to_mask);
     sample &= mask;
-    sample as usize % SIZE
+    let mut hasher = FxHasher::with_seed(SEED);
+    sample.hash(&mut hasher);
+    let hash = hasher.finish() as usize;
+    hash % SIZE
 }
 
 pub struct MyPHFMap {
