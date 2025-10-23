@@ -8,17 +8,14 @@ use rustc_hash::FxHasher;
 
 use crate::station_names::STATION_NAMES;
 
-const OFFSET: usize = 1;
-
 fn get_name_sample(name: &[u8]) -> usize {
+    const OFFSET: usize = 1;
     let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
     let sample = unsafe { ptr.read_unaligned() };
-    let len_mask = if name.len() > 8 + OFFSET {
-        !0
-    } else {
-        (1 << ((name.len() - OFFSET) * 8 - OFFSET)) - 1
-    };
-    (sample & len_mask) as usize
+    let len = (name.len() - 1).min(8);
+    let to_mask = len * 8;
+    let mask = u64::MAX >> (64 - to_mask);
+    (sample & mask) as usize
 }
 
 pub fn print_phf() {
@@ -29,41 +26,39 @@ pub fn print_phf() {
 }
 
 pub fn find_seed_fxhash() {
-    for log_size in 9..22 {
-        println!("testing size {log_size}");
+    for divisor in 413..13167 {
         (0..22).into_par_iter().for_each(|tid| {
-            let mut vec = vec![false; 1 << (log_size)];
-            for seed in (0..1_000_000).step_by(22) {
-                for divisor in tid + 413..vec.len() {
-                    let mut found = true;
-                    for name in STATION_NAMES.iter() {
-                        let sample = get_name_sample(name);
-                        // let masked_sample = seed as u64 + unsafe { _pext_u64( masked_sample, 0b00011111_00011111_00011111_00011111_00011111_00011111_00011111_00011111) };
-                        let mut hasher = FxHasher::with_seed(seed);
-                        sample.hash(&mut hasher);
-                        let hash = hasher.finish() as usize;
-                        // let hash = masked_sample as usize;
-                        let vec_index = hash % divisor;
-                        // let bit_index = hash & 7;
-                        if !vec[vec_index] {
-                            vec[vec_index] = true;
-                        } else {
-                            // println!("failed at {} collided with \n{hash}\n{vec_index}", unsafe {
-                            //     std::str::from_utf8_unchecked(name)
-                            // },);
-                            // unsafe { libc::exit(0) };
-                            vec.fill(false);
-                            found = false;
-                            break;
-                        }
+            let mut vec = vec![false; 13167];
+            for seed in (tid..10000).step_by(22) {
+                let mut found = true;
+                for name in STATION_NAMES.iter() {
+                    let sample = get_name_sample(name);
+                    // let masked_sample = seed as u64 + unsafe { _pext_u64( masked_sample, 0b00011111_00011111_00011111_00011111_00011111_00011111_00011111_00011111) };
+                    let mut hasher = FxHasher::with_seed(seed);
+                    sample.hash(&mut hasher);
+                    let hash = hasher.finish() as usize;
+                    // let hash = masked_sample as usize;
+                    let vec_index = hash % divisor;
+                    // let bit_index = hash & 7;
+                    if !vec[vec_index] {
+                        vec[vec_index] = true;
+                    } else {
+                        // println!("failed at {} collided with \n{hash}\n{vec_index}", unsafe {
+                        //     std::str::from_utf8_unchecked(name)
+                        // },);
+                        // unsafe { libc::exit(0) };
+                        vec.fill(false);
+                        found = false;
+                        break;
                     }
-                    if found {
-                        println!("Seed Found: {seed}");
-                        unsafe { libc::exit(0) };
-                    }
+                }
+                if found {
+                    println!("Seed Found: {seed} with divisor: {divisor}");
+                    unsafe { libc::exit(0) };
                 }
             }
         });
+        println!("Failed {divisor}");
     }
     println!("Failed");
 }
