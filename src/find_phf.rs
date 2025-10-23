@@ -26,30 +26,24 @@ pub fn print_phf() {
 }
 
 const THREADS: usize = 22;
+const MAX_DIVISOR: usize = 7089;
 
 pub fn find_seed_fxhash() {
-    for divisor in 413..13167 {
+    for divisor in 413..MAX_DIVISOR {
         (0..THREADS).into_par_iter().for_each(|tid| {
-            let mut vec = vec![false; 13167];
+            let mut vec = vec![false; MAX_DIVISOR];
             for seed in (tid..10000).step_by(THREADS) {
                 let mut found = true;
                 for name in STATION_NAMES.iter() {
                     let sample = get_name_sample(name);
-                    // let masked_sample = seed as u64 + unsafe { _pext_u64( masked_sample, 0b00011111_00011111_00011111_00011111_00011111_00011111_00011111_00011111) };
                     let mut hasher = FxHasher::with_seed(seed);
                     sample.hash(&mut hasher);
                     let hash = hasher.finish() as usize;
-                    // let hash = masked_sample as usize;
                     let vec_index = hash % divisor;
-                    // let bit_index = hash & 7;
                     if !vec[vec_index] {
                         vec[vec_index] = true;
                     } else {
-                        // println!("failed at {} collided with \n{hash}\n{vec_index}", unsafe {
-                        //     std::str::from_utf8_unchecked(name)
-                        // },);
-                        // unsafe { libc::exit(0) };
-                        vec.fill(false);
+                        vec[..divisor].fill(false);
                         found = false;
                         break;
                     }
@@ -86,15 +80,10 @@ pub fn find_seed() {
                 //     )
                 // };
                 let vec_index = masked_sample as usize % divisor;
-                // let bit_index = hash & 7;
                 if !vec[vec_index] {
                     vec[vec_index] = true;
                 } else {
-                    // println!("failed at {} collided with \n{hash}\n{vec_index}", unsafe {
-                    //     std::str::from_utf8_unchecked(name)
-                    // },);
-                    // unsafe { libc::exit(0) };
-                    vec.fill(false);
+                    vec[..divisor].fill(false);
                     found = false;
                     break;
                 }
