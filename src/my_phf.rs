@@ -76,7 +76,7 @@ impl MyPHFMap {
     }
 
     pub fn merge_maps(&mut self, other_map: Self) {
-        for (entry, other_entry) in self.entries.iter_mut().zip(other_map.entries.into_iter()) {
+        for (entry, other_entry) in self.entries.iter_mut().zip(other_map.entries.iter()) {
             if (entry.count != 0) | (other_entry.count != 0) {
                 entry.sum += other_entry.sum;
                 entry.count += other_entry.count;
