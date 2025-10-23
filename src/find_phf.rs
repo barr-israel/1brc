@@ -25,11 +25,13 @@ pub fn print_phf() {
     }
 }
 
+const THREADS: usize = 22;
+
 pub fn find_seed_fxhash() {
     for divisor in 413..13167 {
-        (0..22).into_par_iter().for_each(|tid| {
+        (0..THREADS).into_par_iter().for_each(|tid| {
             let mut vec = vec![false; 13167];
-            for seed in (tid..10000).step_by(22) {
+            for seed in (tid..10000).step_by(THREADS) {
                 let mut found = true;
                 for name in STATION_NAMES.iter() {
                     let sample = get_name_sample(name);
@@ -64,9 +66,9 @@ pub fn find_seed_fxhash() {
 }
 pub fn find_seed() {
     const OFFSET: usize = 1;
-    (0..22).into_par_iter().for_each(|tid| {
+    (0..THREADS).into_par_iter().for_each(|tid| {
         let mut vec = vec![false; 1 << 20];
-        for divisor in tid + 413..vec.len() {
+        for divisor in (tid + 413..vec.len()).step_by(THREADS) {
             let mut found = true;
             for name in STATION_NAMES.iter() {
                 let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
