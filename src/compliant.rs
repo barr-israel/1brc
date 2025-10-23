@@ -51,7 +51,11 @@ impl Hash for StationName {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let ptr = self.ptr as *const u32;
         let sample = unsafe { ptr.read_unaligned() };
-        let mask = (1 << (self.len * 8 - 1).min(31)) - 1;
+        let mask = if self.len >= 4 {
+            !0
+        } else {
+            (1 << (self.len * 8 - 1)) - 1
+        };
         (sample & mask).hash(state)
     }
 }
