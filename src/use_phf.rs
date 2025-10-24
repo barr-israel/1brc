@@ -5,8 +5,8 @@ use rayon::iter::{ParallelBridge, ParallelIterator};
 
 #[allow(unused_imports)]
 use std::arch::x86_64::{
-    __m256i, _mm256_cmpeq_epi8, _mm256_extract_epi64, _mm256_loadu_si256,
-    _mm256_mask_cmpneq_epu8_mask, _mm256_movemask_epi8, _mm256_set1_epi8, _pext_u32,
+    __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_mask_cmpneq_epu8_mask,
+    _mm256_movemask_epi8, _mm256_set1_epi8, _pext_u32,
 };
 
 use memchr::memrchr;
@@ -65,7 +65,7 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
-fn read_line(text: &[u8]) -> (&[u8], u64, i32) {
+fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
     let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
     let line: __m256i = unsafe { _mm256_loadu_si256(text.as_ptr() as *const __m256i) };
@@ -73,31 +73,43 @@ fn read_line(text: &[u8]) -> (&[u8], u64, i32) {
     let line_break_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break));
     let separator_pos = separator_mask.trailing_zeros() as usize;
     let line_break_pos = line_break_mask.trailing_zeros() as usize;
-    // prepare the name sample for the index calculation in the hash map
-    let mut name_sample = _mm256_extract_epi64::<0>(line) as u64;
-    let len = separator_pos.min(8);
-    let to_mask = len * 8;
-    let mask = u64::MAX >> (64 - to_mask);
-    name_sample &= mask;
     unsafe {
         (
-            text.get_unchecked(line_break_pos + 2..), // 2 instead of 1 to skip the first byte of the next line
-            name_sample,
+            text.get_unchecked(line_break_pos + 1..),
+            text.get_unchecked(..separator_pos),
             parse_measurement(&text[separator_pos + 1..line_break_pos]),
         )
     }
+}
+
+#[cfg(not(target_feature = "avx2"))]
+fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
+    let station_name_slice: &[u8];
+    let measurement_slice: &[u8];
+    (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
+    text = &text[1..]; //skip ';';
+    (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
+    text = &text[1..]; //skip \n;
+    (
+        text,
+        StationName {
+            ptr: station_name_slice.as_ptr(),
+            len: station_name_slice.len() as u8,
+        },
+        parse_measurement(measurement_slice),
+    )
 }
 
 fn process_chunk(chunk: &[u8]) -> MyPHFMap {
     // let mut summary =
     // FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
     let mut summary = MyPHFMap::new();
-    let mut remainder = &chunk[1..]; // skip first byte of every line
-    while remainder.len() != MARGIN - 1 {
-        let station_name_sample;
-        let measurement;
-        (remainder, station_name_sample, measurement) = unsafe { read_line(remainder) };
-        summary.insert_measurement(station_name_sample, measurement);
+    let mut remainder = chunk;
+    while remainder.len() != MARGIN {
+        let station_name: &[u8];
+        let measurement: i32;
+        (remainder, station_name, measurement) = unsafe { read_line(remainder) };
+        summary.insert_measurement(station_name, measurement);
     }
     summary
 }

@@ -28,7 +28,7 @@ impl StationEntry {
     }
 }
 
-fn name_to_index(name: &[u8]) -> usize {
+fn get_name_index(name: &[u8]) -> usize {
     const OFFSET: usize = 1;
     let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
     let mut sample = unsafe { ptr.read_unaligned() };
@@ -36,12 +36,8 @@ fn name_to_index(name: &[u8]) -> usize {
     let to_mask = len * 8;
     let mask = u64::MAX >> (64 - to_mask);
     sample &= mask;
-    sample_to_index(sample)
-}
-
-fn sample_to_index(name_sample: u64) -> usize {
     let mut hasher = FxHasher::with_seed(SEED);
-    name_sample.hash(&mut hasher);
+    sample.hash(&mut hasher);
     let hash = hasher.finish() as usize;
     hash % SIZE
 }
@@ -73,8 +69,8 @@ impl MyPHFMap {
         }
     }
 
-    pub fn insert_measurement(&mut self, name_sample: u64, measurement: i32) {
-        let index = sample_to_index(name_sample);
+    pub fn insert_measurement(&mut self, name: &[u8], measurement: i32) {
+        let index = get_name_index(name);
         let entry = unsafe { self.entries.get_unchecked_mut(index) };
         entry.sum += measurement;
         entry.count += 1;
@@ -102,7 +98,7 @@ impl MyPHFMap {
         let _ = out.write_all(b"{");
         for station_name in STATION_NAMES[..STATION_NAMES.len() - 1].iter() {
             let name = unsafe { std::str::from_utf8_unchecked(station_name) };
-            let index = name_to_index(station_name);
+            let index = get_name_index(station_name);
             let entry = unsafe { self.entries.get_unchecked(index) };
             if entry.count != 0 {
                 let (min, avg, max) = entry.get_result();
@@ -111,7 +107,7 @@ impl MyPHFMap {
         }
         let station_name = STATION_NAMES[STATION_NAMES.len() - 1];
         let name = unsafe { std::str::from_utf8_unchecked(station_name) };
-        let index = name_to_index(station_name);
+        let index = get_name_index(station_name);
         let entry = unsafe { self.entries.get_unchecked(index) };
         if entry.count != 0 {
             let (min, avg, max) = entry.get_result();
