@@ -1,5 +1,5 @@
 use std::{
-    arch::x86_64::_mm_prefetch,
+    arch::x86_64::{_MM_HINT_ET0, _mm_prefetch},
     io::Write,
     mem::{MaybeUninit, transmute},
 };
@@ -64,7 +64,7 @@ impl MyPHFMap {
     }
 
     pub fn prefetch(&self, name_index: usize) {
-        unsafe { _mm_prefetch::<0>(self.entries.as_ptr().add(name_index) as *const i8) };
+        unsafe { _mm_prefetch::<_MM_HINT_ET0>(self.entries.as_ptr().add(name_index) as *const i8) };
     }
 
     pub fn insert_measurement(&mut self, name: &[u8], measurement: i32) {

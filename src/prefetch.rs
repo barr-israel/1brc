@@ -82,24 +82,6 @@ fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
     }
 }
 
-#[cfg(not(target_feature = "avx2"))]
-fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
-    let station_name_slice: &[u8];
-    let measurement_slice: &[u8];
-    (station_name_slice, text) = text.split_at(memchr(b';', &text[3..]).unwrap() + 3);
-    text = &text[1..]; //skip ';';
-    (measurement_slice, text) = text.split_at(memchr(b'\n', &text[3..]).unwrap() + 3);
-    text = &text[1..]; //skip \n;
-    (
-        text,
-        StationName {
-            ptr: station_name_slice.as_ptr(),
-            len: station_name_slice.len() as u8,
-        },
-        parse_measurement(measurement_slice),
-    )
-}
-
 fn process_chunk(chunk: &[u8]) -> MyPHFMap {
     let mut summary = MyPHFMap::new();
     let (mut remainder, station_name, mut measurement) = unsafe { read_line(chunk) };
