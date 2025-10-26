@@ -116,7 +116,6 @@ fn process_chunk(chunk: &[u8]) -> MyPHFMap {
 
 fn set_affinity(tid: usize) {
     unsafe {
-        dbg!(tid);
         let mut cpu_set = std::mem::zeroed::<libc::cpu_set_t>();
         libc::CPU_SET(tid, &mut cpu_set);
         libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpu_set);
