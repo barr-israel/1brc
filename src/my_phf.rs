@@ -1,15 +1,12 @@
 use std::{
-    hash::{Hash, Hasher},
+    arch::x86_64::_mm_prefetch,
     io::Write,
     mem::{MaybeUninit, transmute},
 };
 
-use rustc_hash::FxHasher;
-
 use crate::station_names::STATION_NAMES;
 
-const SIZE: usize = 7088;
-const SEED: usize = 1339;
+const SIZE: usize = 13779;
 
 pub struct StationEntry {
     pub sum: i32,
@@ -28,7 +25,7 @@ impl StationEntry {
     }
 }
 
-fn get_name_index(name: &[u8]) -> usize {
+pub fn get_name_index(name: &[u8]) -> usize {
     const OFFSET: usize = 1;
     let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
     let mut sample = unsafe { ptr.read_unaligned() };
@@ -36,10 +33,7 @@ fn get_name_index(name: &[u8]) -> usize {
     let to_mask = len * 8;
     let mask = u64::MAX >> (64 - to_mask);
     sample &= mask;
-    let mut hasher = FxHasher::with_seed(SEED);
-    sample.hash(&mut hasher);
-    let hash = hasher.finish() as usize;
-    hash % SIZE
+    sample as usize % SIZE
 }
 
 pub struct MyPHFMap {
@@ -69,9 +63,12 @@ impl MyPHFMap {
         }
     }
 
-    pub fn insert_measurement(&mut self, name: &[u8], measurement: i32) {
-        let index = get_name_index(name);
-        let entry = unsafe { self.entries.get_unchecked_mut(index) };
+    pub fn prefetch(&self, name_index: usize) {
+        unsafe { _mm_prefetch::<0>(self.entries.as_ptr().add(name_index) as *const i8) };
+    }
+
+    pub fn insert_measurement(&mut self, name_index: usize, measurement: i32) {
+        let entry = unsafe { self.entries.get_unchecked_mut(name_index) };
         entry.sum += measurement;
         entry.count += 1;
         if measurement > entry.max {

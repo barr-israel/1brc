@@ -14,7 +14,7 @@ use memchr::memrchr;
 #[allow(unused_imports)]
 use memchr::memchr;
 
-use crate::my_phf::MyPHFMap;
+use crate::my_phf::{MyPHFMap, get_name_index};
 
 const MARGIN: usize = 32;
 
@@ -104,12 +104,18 @@ fn process_chunk(chunk: &[u8]) -> MyPHFMap {
     // let mut summary =
     // FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
     let mut summary = MyPHFMap::new();
-    let mut remainder = chunk;
+    let (mut remainder, station_name, mut measurement) = unsafe { read_line(chunk) };
+    let mut index = get_name_index(station_name);
+    summary.prefetch(index);
     while remainder.len() != MARGIN {
         let station_name: &[u8];
-        let measurement: i32;
-        (remainder, station_name, measurement) = unsafe { read_line(remainder) };
-        summary.insert_measurement(station_name, measurement);
+        let new_measurement: i32;
+        (remainder, station_name, new_measurement) = unsafe { read_line(remainder) };
+        let new_index = get_name_index(station_name);
+        summary.prefetch(new_index);
+        summary.insert_measurement(index, measurement);
+        index = new_index;
+        measurement = new_measurement;
     }
     summary
 }
