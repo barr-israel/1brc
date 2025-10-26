@@ -67,7 +67,10 @@ impl MyPHFMap {
         unsafe { _mm_prefetch::<0>(self.entries.as_ptr().add(name_index) as *const i8) };
     }
 
-    pub fn insert_measurement(&mut self, name_index: usize, measurement: i32) {
+    pub fn insert_measurement(&mut self, name: &[u8], measurement: i32) {
+        self.insert_measurement_by_index(get_name_index(name), measurement);
+    }
+    pub fn insert_measurement_by_index(&mut self, name_index: usize, measurement: i32) {
         let entry = unsafe { self.entries.get_unchecked_mut(name_index) };
         entry.sum += measurement;
         entry.count += 1;

@@ -102,8 +102,6 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
 }
 
 fn process_chunk(chunk: &[u8]) -> MyHashMap {
-    // let mut summary =
-    // FxHashMap::<StationName, StationEntry>::with_capacity_and_hasher(1024, Default::default());
     let mut summary = MyHashMap::new();
     let mut remainder = chunk;
     while (remainder.len() - MARGIN) != 0 {

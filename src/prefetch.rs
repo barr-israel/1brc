@@ -1,3 +1,4 @@
+use std::arch::x86_64::_mm_prefetch;
 use std::io::{PipeWriter, Write};
 use std::{fs::File, io::Error, os::fd::AsRawFd, slice::from_raw_parts};
 
@@ -14,32 +15,38 @@ use memchr::memrchr;
 #[allow(unused_imports)]
 use memchr::memchr;
 
-use crate::my_phf::MyPHFMap;
+use crate::my_phf::{MyPHFMap, get_name_index};
 
 const MARGIN: usize = 32;
 
-fn parse_measurement(text: &[u8]) -> i32 {
-    static LUT: [i16; 1 << 16] = {
-        let mut lut = [0; 1 << 16];
-        let mut i = 0usize;
-        while i < (1 << 16) {
-            let digit0 = i as i16 & 0xf;
-            let digit1 = (i >> 4) as i16 & 0xf;
-            let digit2 = (i >> 8) as i16 & 0xf;
-            let digit3 = (i >> 12) as i16 & 0xf;
-            lut[i] = if digit1 == b'.' as i16 & 0xf {
-                digit0 * 10 + digit2
-            } else {
-                digit0 * 100 + digit1 * 10 + digit3
-            };
-            i += 1;
-        }
-        lut
-    };
+static LUT: [i16; 1 << 16] = {
+    let mut lut = [0; 1 << 16];
+    let mut i = 0usize;
+    while i < (1 << 16) {
+        let digit0 = i as i16 & 0xf;
+        let digit1 = (i >> 4) as i16 & 0xf;
+        let digit2 = (i >> 8) as i16 & 0xf;
+        let digit3 = (i >> 12) as i16 & 0xf;
+        lut[i] = if digit1 == b'.' as i16 & 0xf {
+            digit0 * 10 + digit2
+        } else {
+            digit0 * 100 + digit1 * 10 + digit3
+        };
+        i += 1;
+    }
+    lut
+};
+
+fn parse_measurement_prefetch(text: &[u8]) -> (bool, usize) {
     let negative = unsafe { *text.get_unchecked(0) } == b'-';
     let raw_key = unsafe { (text.as_ptr().add(negative as usize) as *const u32).read_unaligned() };
-    let packed_key = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) };
-    let abs_val = unsafe { *LUT.get_unchecked(packed_key as usize) } as i32;
+    let index = unsafe { _pext_u32(raw_key, 0b00001111000011110000111100001111) as usize };
+    unsafe { _mm_prefetch::<0>(LUT.as_ptr().add(index) as *const i8) };
+    (negative, index)
+}
+
+fn parse_measurement_fetch(negative: bool, index: usize) -> i32 {
+    let abs_val = unsafe { *LUT.get_unchecked(index) } as i32;
     if negative { -abs_val } else { abs_val }
 }
 
@@ -65,7 +72,7 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
-fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
+fn read_line(text: &[u8]) -> (&[u8], &[u8], &[u8]) {
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
     let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
     let line: __m256i = unsafe { _mm256_loadu_si256(text.as_ptr() as *const __m256i) };
@@ -77,7 +84,7 @@ fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
         (
             text.get_unchecked(line_break_pos + 1..),
             text.get_unchecked(..separator_pos),
-            parse_measurement(&text[separator_pos + 1..line_break_pos]),
+            &text[separator_pos + 1..line_break_pos],
         )
     }
 }
@@ -102,12 +109,24 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
 
 fn process_chunk(chunk: &[u8]) -> MyPHFMap {
     let mut summary = MyPHFMap::new();
-    let mut remainder = chunk;
+    let (mut remainder, station_name, measurement_slice) = unsafe { read_line(chunk) };
+    let mut name_index = get_name_index(station_name);
+    summary.prefetch(name_index);
+    let (mut neg, mut measurement_index) = parse_measurement_prefetch(measurement_slice);
     while remainder.len() != MARGIN {
         let station_name: &[u8];
-        let measurement: i32;
-        (remainder, station_name, measurement) = unsafe { read_line(remainder) };
-        summary.insert_measurement(station_name, measurement);
+        let new_measurement_slice: &[u8];
+        (remainder, station_name, new_measurement_slice) = unsafe { read_line(remainder) };
+        let new_index = get_name_index(station_name);
+        summary.prefetch(new_index);
+        let (new_neg, new_measurement_index) = parse_measurement_prefetch(new_measurement_slice);
+        summary.insert_measurement_by_index(
+            name_index,
+            parse_measurement_fetch(neg, measurement_index),
+        );
+        name_index = new_index;
+        neg = new_neg;
+        measurement_index = new_measurement_index;
     }
     summary
 }
