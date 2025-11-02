@@ -129,7 +129,7 @@ impl MyHashMap {
         let entry = unsafe {
             loop {
                 let index = hash & MASK;
-                let potential_name = self.names.get_unchecked_mut(index & MASK);
+                let potential_name = self.names.get_unchecked_mut(index);
                 if potential_name.ptr.is_null() {
                     *potential_name = name;
                     break self.entries.get_unchecked_mut(index);
