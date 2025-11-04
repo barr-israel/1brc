@@ -109,32 +109,23 @@ fn process_chunk((chunk, chunk2): (&[u8], &[u8])) -> MyPHFMap {
     while (remainder.len() != MARGIN) & (remainder2.len() != MARGIN) {
         let line: __m256i = unsafe { _mm256_loadu_si256(remainder.as_ptr() as *const __m256i) };
         let line2: __m256i = unsafe { _mm256_loadu_si256(remainder2.as_ptr() as *const __m256i) };
-
         let separator_mask = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, separator)) };
         let separator_mask2 = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line2, separator)) };
-
         let line_break_mask = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break)) };
         let line_break_mask2 =
             unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line2, line_break)) };
-
         let separator_pos = separator_mask.trailing_zeros() as usize;
         let separator_pos2 = separator_mask2.trailing_zeros() as usize;
-
         let line_break_pos = line_break_mask.trailing_zeros() as usize;
         let line_break_pos2 = line_break_mask2.trailing_zeros() as usize;
-
         let station_name = unsafe { remainder.get_unchecked(..separator_pos) };
         let station_name2 = unsafe { remainder2.get_unchecked(..separator_pos2) };
-
         let measurement = parse_measurement(&remainder[separator_pos + 1..line_break_pos]);
         let measurement2 = parse_measurement(&remainder2[separator_pos2 + 1..line_break_pos2]);
-
         remainder = unsafe { remainder.get_unchecked(line_break_pos + 1..) };
         remainder2 = unsafe { remainder2.get_unchecked(line_break_pos2 + 1..) };
-
         let index = get_name_index(station_name);
         let index2 = get_name_index(station_name2);
-
         summary.insert_measurement_by_index(index, measurement);
         summary.insert_measurement_by_index(index2, measurement2);
     }
