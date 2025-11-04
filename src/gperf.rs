@@ -1,8 +1,3 @@
-const TOTAL_KEYWORDS: usize = 413;
-const MIN_WORD_LENGTH: usize = 3;
-const MAX_WORD_LENGTH: usize = 26;
-const MIN_HASH_VALUE: usize = 5;
-const MAX_HASH_VALUE: usize = 1268;
 pub fn hash(name: &[u8], len: usize) -> usize {
     const ASSO_VALUES: [u16; 256] = [
         1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269, 1269,
