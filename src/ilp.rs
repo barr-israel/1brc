@@ -100,71 +100,43 @@ fn read_line(mut text: &[u8]) -> (&[u8], StationName, i32) {
     )
 }
 
-fn process_chunk((chunk, chunk2, chunk3, chunk4): (&[u8], &[u8], &[u8], &[u8])) -> MyPHFMap {
+fn process_chunk((chunk, chunk2): (&[u8], &[u8])) -> MyPHFMap {
     let mut summary = MyPHFMap::new();
     let mut remainder = chunk;
     let mut remainder2 = chunk2;
-    let mut remainder3 = chunk3;
-    let mut remainder4 = chunk4;
     let separator: __m256i = unsafe { _mm256_set1_epi8(b';' as i8) };
     let line_break: __m256i = unsafe { _mm256_set1_epi8(b'\n' as i8) };
-    while (remainder.len() != MARGIN)
-        & (remainder2.len() != MARGIN)
-        & (remainder3.len() != MARGIN)
-        & (remainder4.len() != MARGIN)
-    {
+    while (remainder.len() != MARGIN) & (remainder2.len() != MARGIN) {
         let line: __m256i = unsafe { _mm256_loadu_si256(remainder.as_ptr() as *const __m256i) };
         let line2: __m256i = unsafe { _mm256_loadu_si256(remainder2.as_ptr() as *const __m256i) };
-        let line3: __m256i = unsafe { _mm256_loadu_si256(remainder3.as_ptr() as *const __m256i) };
-        let line4: __m256i = unsafe { _mm256_loadu_si256(remainder4.as_ptr() as *const __m256i) };
 
         let separator_mask = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, separator)) };
         let separator_mask2 = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line2, separator)) };
-        let separator_mask3 = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line3, separator)) };
-        let separator_mask4 = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line4, separator)) };
 
         let line_break_mask = unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break)) };
         let line_break_mask2 =
             unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line2, line_break)) };
-        let line_break_mask3 =
-            unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line3, line_break)) };
-        let line_break_mask4 =
-            unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(line4, line_break)) };
 
         let separator_pos = separator_mask.trailing_zeros() as usize;
         let separator_pos2 = separator_mask2.trailing_zeros() as usize;
-        let separator_pos3 = separator_mask3.trailing_zeros() as usize;
-        let separator_pos4 = separator_mask4.trailing_zeros() as usize;
 
         let line_break_pos = line_break_mask.trailing_zeros() as usize;
         let line_break_pos2 = line_break_mask2.trailing_zeros() as usize;
-        let line_break_pos3 = line_break_mask3.trailing_zeros() as usize;
-        let line_break_pos4 = line_break_mask4.trailing_zeros() as usize;
 
         let station_name = unsafe { remainder.get_unchecked(..separator_pos) };
         let station_name2 = unsafe { remainder2.get_unchecked(..separator_pos2) };
-        let station_name3 = unsafe { remainder3.get_unchecked(..separator_pos3) };
-        let station_name4 = unsafe { remainder4.get_unchecked(..separator_pos4) };
 
         let measurement = parse_measurement(&remainder[separator_pos + 1..line_break_pos]);
         let measurement2 = parse_measurement(&remainder2[separator_pos2 + 1..line_break_pos2]);
-        let measurement3 = parse_measurement(&remainder3[separator_pos3 + 1..line_break_pos3]);
-        let measurement4 = parse_measurement(&remainder4[separator_pos4 + 1..line_break_pos4]);
 
         remainder = unsafe { remainder.get_unchecked(line_break_pos + 1..) };
         remainder2 = unsafe { remainder2.get_unchecked(line_break_pos2 + 1..) };
-        remainder3 = unsafe { remainder3.get_unchecked(line_break_pos3 + 1..) };
-        remainder4 = unsafe { remainder4.get_unchecked(line_break_pos4 + 1..) };
 
         let index = get_name_index(station_name);
         let index2 = get_name_index(station_name2);
-        let index3 = get_name_index(station_name3);
-        let index4 = get_name_index(station_name4);
 
         summary.insert_measurement_by_index(index, measurement);
         summary.insert_measurement_by_index(index2, measurement2);
-        summary.insert_measurement_by_index(index3, measurement3);
-        summary.insert_measurement_by_index(index4, measurement4);
     }
     while remainder.len() != MARGIN {
         let station_name: &[u8];
@@ -176,18 +148,6 @@ fn process_chunk((chunk, chunk2, chunk3, chunk4): (&[u8], &[u8], &[u8], &[u8])) 
         let station_name: &[u8];
         let measurement: i32;
         (remainder2, station_name, measurement) = unsafe { read_line(remainder2) };
-        summary.insert_measurement(station_name, measurement);
-    }
-    while remainder3.len() != MARGIN {
-        let station_name: &[u8];
-        let measurement: i32;
-        (remainder3, station_name, measurement) = unsafe { read_line(remainder3) };
-        summary.insert_measurement(station_name, measurement);
-    }
-    while remainder4.len() != MARGIN {
-        let station_name: &[u8];
-        let measurement: i32;
-        (remainder4, station_name, measurement) = unsafe { read_line(remainder4) };
         summary.insert_measurement(station_name, measurement);
     }
     summary
@@ -207,7 +167,7 @@ pub fn run(mut writer: PipeWriter) {
         .unwrap();
     let chunks_mult = 16;
     let chunks = thread_count * chunks_mult;
-    let ideal_chunk_size = mapped_file.len() / (chunks * 4);
+    let ideal_chunk_size = mapped_file.len() / (chunks * 2);
     let mut remainder = mapped_file;
     let final_summary = (0..chunks)
         .map(|_| {
@@ -217,13 +177,7 @@ pub fn run(mut writer: PipeWriter) {
             let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
             let chunk2: &[u8] = &remainder[..chunk_end + MARGIN + 1];
             remainder = &remainder[chunk_end + 1..];
-            let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
-            let chunk3: &[u8] = &remainder[..chunk_end + MARGIN + 1];
-            remainder = &remainder[chunk_end + 1..];
-            let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
-            let chunk4: &[u8] = &remainder[..chunk_end + MARGIN + 1];
-            remainder = &remainder[chunk_end + 1..];
-            (chunk, chunk2, chunk3, chunk4)
+            (chunk, chunk2)
         })
         .par_bridge()
         .map(process_chunk)
