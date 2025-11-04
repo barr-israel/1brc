@@ -1,10 +1,9 @@
 use std::{
-    arch::x86_64::{_MM_HINT_ET0, _mm_prefetch},
     io::Write,
     mem::{MaybeUninit, transmute},
 };
 
-use crate::{gperf, station_names::STATION_NAMES};
+use crate::station_names::STATION_NAMES;
 
 const SIZE: usize = 13779;
 
@@ -25,20 +24,20 @@ impl StationEntry {
     }
 }
 
-// pub fn get_name_index(name: &[u8]) -> usize {
-//     const OFFSET: usize = 1;
-//     let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
-//     let mut sample = unsafe { ptr.read_unaligned() };
-//     let len = (name.len() - 1).min(8);
-//     let to_mask = len * 8;
-//     let mask = u64::MAX >> (64 - to_mask);
-//     sample &= mask;
-//     sample as usize % SIZE
-// }
-
 pub fn get_name_index(name: &[u8]) -> usize {
-    gperf::hash(name, name.len())
+    const OFFSET: usize = 1;
+    let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
+    let mut sample = unsafe { ptr.read_unaligned() };
+    let len = (name.len() - 1).min(8);
+    let to_mask = len * 8;
+    let mask = u64::MAX >> (64 - to_mask);
+    sample &= mask;
+    sample as usize % SIZE
 }
+
+// pub fn get_name_index(name: &[u8]) -> usize {
+//     gperf::hash(name, name.len())
+// }
 
 pub struct MyPHFMap {
     entries: Box<[StationEntry; SIZE]>,
@@ -67,9 +66,10 @@ impl MyPHFMap {
         }
     }
 
-    pub fn prefetch(&self, name_index: usize) {
-        unsafe { _mm_prefetch::<_MM_HINT_ET0>(self.entries.as_ptr().add(name_index) as *const i8) };
-    }
+    // pub fn prefetch(&self, name_index: usize) {
+    //     use std::arch::x86_64::{_MM_HINT_ET0, _mm_prefetch};
+    //     unsafe { _mm_prefetch::<_MM_HINT_ET0>(self.entries.as_ptr().add(name_index) as *const i8) };
+    // }
 
     pub fn insert_measurement(&mut self, name: &[u8], measurement: i32) {
         self.insert_measurement_by_index(get_name_index(name), measurement);
