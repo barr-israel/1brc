@@ -4,7 +4,7 @@ use std::{
     mem::{MaybeUninit, transmute},
 };
 
-use crate::station_names::STATION_NAMES;
+use crate::{gperf, station_names::STATION_NAMES};
 
 const SIZE: usize = 13779;
 
@@ -25,15 +25,19 @@ impl StationEntry {
     }
 }
 
+// pub fn get_name_index(name: &[u8]) -> usize {
+//     const OFFSET: usize = 1;
+//     let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
+//     let mut sample = unsafe { ptr.read_unaligned() };
+//     let len = (name.len() - 1).min(8);
+//     let to_mask = len * 8;
+//     let mask = u64::MAX >> (64 - to_mask);
+//     sample &= mask;
+//     sample as usize % SIZE
+// }
+
 pub fn get_name_index(name: &[u8]) -> usize {
-    const OFFSET: usize = 1;
-    let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
-    let mut sample = unsafe { ptr.read_unaligned() };
-    let len = (name.len() - 1).min(8);
-    let to_mask = len * 8;
-    let mask = u64::MAX >> (64 - to_mask);
-    sample &= mask;
-    sample as usize % SIZE
+    gperf::hash(name, name.len())
 }
 
 pub struct MyPHFMap {

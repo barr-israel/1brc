@@ -3,6 +3,7 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use std::io::Read;
 
+mod gperf;
 mod my_phf;
 mod station_names;
 mod use_phf;
