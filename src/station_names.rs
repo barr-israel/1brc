@@ -1,3 +1,5 @@
+use crate::my_phf::get_name_index;
+
 pub static STATION_NAMES: [&[u8]; 413] = [
     "Abha".as_bytes(),
     "Abidjan".as_bytes(),
@@ -413,3 +415,34 @@ pub static STATION_NAMES: [&[u8]; 413] = [
     "Ürümqi".as_bytes(),
     "İzmir".as_bytes(),
 ];
+
+const SIZE: usize = 13779;
+
+pub const REDIRECTION_TABLE: [u16; SIZE] = {
+    let mut table = [0; 13779];
+    let mut station_index = 0usize;
+    while station_index != STATION_NAMES.len() {
+        let mut name_slice = [0u8; 9];
+        let name = STATION_NAMES[station_index];
+        let mut name_idx = 0usize;
+        while name_idx < name.len() && name_idx < name_slice.len() {
+            name_slice[name_idx] = name[name_idx];
+            name_idx += 1;
+        }
+        const OFFSET: usize = 1;
+        let ptr = unsafe { name_slice.as_ptr().add(OFFSET) } as *const u64;
+        let mut sample = unsafe { ptr.read_unaligned() };
+        let len = if name.len() - 1 > 8 {
+            8
+        } else {
+            name.len() - 1
+        };
+        let to_mask = len * 8;
+        let mask = u64::MAX >> (64 - to_mask);
+        sample &= mask;
+        let hash = sample as usize % SIZE;
+        table[hash] = station_index as u16;
+        station_index += 1;
+    }
+    table
+};
