@@ -416,10 +416,10 @@ pub static STATION_NAMES: [&[u8]; 413] = [
     "İzmir".as_bytes(),
 ];
 
-const SIZE: usize = 13779;
+const HASH_MAX_INDEX: usize = 13779;
 
-pub const REDIRECTION_TABLE: [u16; SIZE] = {
-    let mut table = [0; 13779];
+pub static REDIRECTION_TABLE: [u16; HASH_MAX_INDEX] = {
+    let mut table = [0; HASH_MAX_INDEX];
     let mut station_index = 0usize;
     while station_index != STATION_NAMES.len() {
         let mut name_slice = [0u8; 9];
@@ -440,7 +440,7 @@ pub const REDIRECTION_TABLE: [u16; SIZE] = {
         let to_mask = len * 8;
         let mask = u64::MAX >> (64 - to_mask);
         sample &= mask;
-        let hash = sample as usize % SIZE;
+        let hash = sample as usize % HASH_MAX_INDEX;
         table[hash] = station_index as u16;
         station_index += 1;
     }
