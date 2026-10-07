@@ -1,4 +1,5 @@
 use std::{
+    arch::x86_64::_bzhi_u64,
     io::Write,
     mem::{MaybeUninit, transmute},
 };
@@ -56,13 +57,12 @@ impl StationEntry {
 }
 
 pub fn get_name_index(name: &[u8]) -> usize {
+    // bytes 1-9 are unique among all possible station names
     const OFFSET: usize = 1;
-    let ptr = unsafe { name.as_ptr().add(OFFSET) } as *const u64;
-    let mut sample = unsafe { ptr.read_unaligned() };
-    let len = (name.len() - 1).min(8);
-    let to_mask = len * 8;
-    let mask = u64::MAX >> (64 - to_mask);
-    sample &= mask;
+    let mut sample = unsafe { ((name.as_ptr().add(OFFSET)) as *const u64).read_unaligned() };
+    let name_bits = ((name.len() - 1) * 8) as u32;
+    // zero bytes we read that are not part of the name
+    sample = unsafe { _bzhi_u64(sample, name_bits) };
     let index = (sample.wrapping_mul(MAGIC) >> (64 - HASH_BITS)) as usize;
     REDIRECTION_TABLE[index] as usize
 }

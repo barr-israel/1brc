@@ -9,7 +9,6 @@ use std::arch::x86_64::{
     _mm256_movemask_epi8, _mm256_set1_epi8, _pext_u32,
 };
 
-use llvm_mca::{llvm_mca_begin, llvm_mca_end};
 use memchr::memrchr;
 
 #[allow(unused_imports)]
@@ -67,13 +66,13 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 #[cfg(target_feature = "avx2")]
 #[target_feature(enable = "avx2")]
 fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
-    let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
     let separator: __m256i = _mm256_set1_epi8(b';' as i8);
+    let line_break: __m256i = _mm256_set1_epi8(b'\n' as i8);
     let line: __m256i = unsafe { _mm256_loadu_si256(text.as_ptr() as *const __m256i) };
-    let line_break_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break));
     let separator_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, separator));
-    let line_break_pos = line_break_mask.trailing_zeros() as usize;
+    let line_break_mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(line, line_break));
     let separator_pos = separator_mask.trailing_zeros() as usize;
+    let line_break_pos = line_break_mask.trailing_zeros() as usize;
     unsafe {
         (
             text.get_unchecked(line_break_pos + 1..),
@@ -83,31 +82,9 @@ fn read_line(text: &[u8]) -> (&[u8], &[u8], i32) {
     }
 }
 
-fn process_chunk_pair(chunk1: &[u8], chunk2: &[u8], summary: &mut MyPHFMap) {
-    let mut remainder1 = chunk1;
-    let mut remainder2 = chunk2;
-    // process a line from each chunk in parallel to increase ILP
-    while remainder1.len() != MARGIN && remainder2.len() != MARGIN {
-        llvm_mca_begin!("processing");
-        let station_name1: &[u8];
-        let measurement1: i32;
-        let station_name2: &[u8];
-        let measurement2: i32;
-        (remainder1, station_name1, measurement1) = unsafe { read_line(remainder1) };
-        (remainder2, station_name2, measurement2) = unsafe { read_line(remainder2) };
-        summary.insert_measurement(station_name1, measurement1);
-        summary.insert_measurement(station_name2, measurement2);
-        llvm_mca_end!("processing");
-    }
-    // handle the tail of the chunk that has more lines
-    let mut remainder = match (remainder1.len() != MARGIN, remainder2.len() != MARGIN) {
-        (true, false) => remainder1,
-        (false, true) => remainder2,
-        (false, false) => return,
-        (true, true) => unreachable!(),
-    };
+fn process_chunk(chunk: &[u8], summary: &mut MyPHFMap) {
+    let mut remainder = chunk;
     while remainder.len() != MARGIN {
-        llvm_mca_begin!("tail");
         let station_name: &[u8];
         let measurement: i32;
         (remainder, station_name, measurement) = unsafe { read_line(remainder) };
@@ -126,9 +103,7 @@ pub fn run(mut writer: PipeWriter) {
         .expect("invalid thread count");
 
     // split the file into chunks
-    const CHUNKS_PER_THREAD: usize = 128;
-    // chunk pairing later requires an even amount of chunks
-    const _: () = assert!(CHUNKS_PER_THREAD.is_multiple_of(2));
+    const CHUNKS_PER_THREAD: usize = 64;
     let chunk_count = thread_count * CHUNKS_PER_THREAD;
     let ideal_chunk_size = mapped_file.len() / chunk_count;
     let mut chunks = Vec::with_capacity(chunk_count);
@@ -148,18 +123,10 @@ pub fn run(mut writer: PipeWriter) {
             .map(|_| {
                 scope.spawn(|| {
                     let mut thread_summary = MyPHFMap::new();
-                    loop {
-                        // 2 chunks at a time for better ILP
-                        let chunk_pair_first = claimed_chunks.fetch_add(2, Relaxed);
-                        if chunk_pair_first >= chunks.len() {
-                            return thread_summary;
-                        }
-                        process_chunk_pair(
-                            chunks[chunk_pair_first],
-                            chunks[chunk_pair_first + 1],
-                            &mut thread_summary,
-                        );
+                    while let Some(my_chunk) = chunks.get(claimed_chunks.fetch_add(1, Relaxed)) {
+                        process_chunk(my_chunk, &mut thread_summary);
                     }
+                    thread_summary
                 })
             })
             .collect();
