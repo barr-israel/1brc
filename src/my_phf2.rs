@@ -3,9 +3,40 @@ use std::{
     mem::{MaybeUninit, transmute},
 };
 
-use crate::station_names::{REDIRECTION_TABLE, STATION_NAMES};
+use crate::station_names::{STATION_NAMES, STATIONS_COUNT};
 
-const SIZE: usize = 13779;
+// const HASH_MAX_INDEX: usize = 13779;
+const HASH_BITS: u32 = 13;
+const MAGIC: u64 = 0x1513e297e95c0875;
+
+static REDIRECTION_TABLE: [u16; 1 << HASH_BITS] = {
+    let mut table = [0; 1 << HASH_BITS];
+    let mut station_index = 0usize;
+    while station_index != STATION_NAMES.len() {
+        let mut name_slice = [0u8; 9];
+        let name = STATION_NAMES[station_index];
+        let mut name_idx = 0usize;
+        while name_idx < name.len() && name_idx < name_slice.len() {
+            name_slice[name_idx] = name[name_idx];
+            name_idx += 1;
+        }
+        const OFFSET: usize = 1;
+        let ptr = unsafe { name_slice.as_ptr().add(OFFSET) } as *const u64;
+        let mut sample = unsafe { ptr.read_unaligned() };
+        let len = if name.len() - 1 > 8 {
+            8
+        } else {
+            name.len() - 1
+        };
+        let to_mask = len * 8;
+        let mask = u64::MAX >> (64 - to_mask);
+        sample &= mask;
+        let hash = (sample.wrapping_mul(MAGIC) >> (64 - HASH_BITS)) as usize;
+        table[hash] = station_index as u16;
+        station_index += 1;
+    }
+    table
+};
 
 pub struct StationEntry {
     pub sum: i32,
@@ -32,23 +63,20 @@ pub fn get_name_index(name: &[u8]) -> usize {
     let to_mask = len * 8;
     let mask = u64::MAX >> (64 - to_mask);
     sample &= mask;
-    let index = sample as usize % SIZE;
+    let index = (sample.wrapping_mul(MAGIC) >> (64 - HASH_BITS)) as usize;
     REDIRECTION_TABLE[index] as usize
 }
 
-// pub fn get_name_index(name: &[u8]) -> usize {
-//     gperf::hash(name, name.len())
-// }
-
 pub struct MyPHFMap {
-    entries: Box<[StationEntry; 413]>,
+    entries: Box<[StationEntry; STATIONS_COUNT]>,
 }
 
 impl MyPHFMap {
     pub fn new() -> MyPHFMap {
         let mut entries;
         unsafe {
-            entries = Box::<[MaybeUninit<StationEntry>; 413]>::new_uninit().assume_init();
+            entries =
+                Box::<[MaybeUninit<StationEntry>; STATIONS_COUNT]>::new_uninit().assume_init();
         }
         for entry in entries.iter_mut() {
             entry.write(StationEntry {
@@ -60,9 +88,10 @@ impl MyPHFMap {
         }
         MyPHFMap {
             entries: unsafe {
-                transmute::<Box<[MaybeUninit<StationEntry>; 413]>, Box<[StationEntry; 413]>>(
-                    entries,
-                )
+                transmute::<
+                    Box<[MaybeUninit<StationEntry>; STATIONS_COUNT]>,
+                    Box<[StationEntry; STATIONS_COUNT]>,
+                >(entries)
             },
         }
     }
