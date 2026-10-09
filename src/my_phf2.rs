@@ -10,6 +10,8 @@ use crate::station_names::{STATION_NAMES, STATIONS_COUNT};
 const HASH_BITS: u32 = 13;
 const MAGIC: u64 = 0x1513e297e95c0875;
 
+// static table mapping each possible hash to an index in a packed station array,
+// without it we would index directly into a sparse station array.
 static REDIRECTION_TABLE: [u16; 1 << HASH_BITS] = {
     let mut table = [0; 1 << HASH_BITS];
     let mut station_index = 0usize;

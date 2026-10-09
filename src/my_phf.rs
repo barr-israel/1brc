@@ -7,6 +7,8 @@ use crate::station_names::{STATION_NAMES, STATIONS_COUNT};
 
 const HASH_MAX_INDEX: usize = 13779;
 
+// static table mapping each possible hash to an index in a packed station array,
+// without it we would index directly into a sparse station array.
 static REDIRECTION_TABLE: [u16; HASH_MAX_INDEX] = {
     let mut table = [0; HASH_MAX_INDEX];
     let mut station_index = 0usize;
@@ -148,4 +150,3 @@ impl MyPHFMap {
         _ = out.flush();
     }
 }
-
