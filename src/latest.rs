@@ -11,6 +11,7 @@ use std::arch::x86_64::{
 };
 use std::hint::cold_path;
 
+use llvm_mca::{llvm_mca_begin, llvm_mca_end};
 use memchr::memrchr;
 
 #[allow(unused_imports)]
@@ -78,11 +79,86 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
 }
 
 const LINES_PER_BATCH: usize = 256;
+#[cfg(all(target_feature = "avx2", not(target_feature = "avx512bw")))]
 const SIMD_SIZE: usize = 32;
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi2"
+))]
+const SIMD_SIZE: usize = 64;
 // oversized so we can finish the current iterations without worrying about overflow
 const BATCH_BUFFER_SIZE: usize = LINES_PER_BATCH + SIMD_SIZE;
 
-#[cfg(target_feature = "avx2")]
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi2"
+))]
+#[target_feature(enable = "avx512f,avx512bw,avx512vbmi2")]
+fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (usize, usize) {
+    use std::{
+        arch::x86_64::{__m512i, _mm512_loadu_si512},
+        array::from_fn,
+    };
+    const IOTA: [u8; 64] = {
+        let mut arr = [0u8; 64];
+        let mut i = 0;
+        while i < 64 {
+            arr[i] = i as u8;
+            i += 1
+        }
+        arr
+    };
+    let iota_vec = unsafe { _mm512_loadu_si512(IOTA.as_ptr() as *const __m512i) };
+    let mut offset = 0usize;
+    let mut remaining = text.len();
+    let mut batch_size = 0;
+    while batch_size <= LINES_PER_BATCH {
+        use std::arch::x86_64::{
+            _bzhi_u64, _mm512_add_epi64, _mm512_castsi512_si128, _mm512_cmpeq_epi8_mask,
+            _mm512_cvtepu8_epi64, _mm512_mask_compress_epi8, _mm512_maskz_compress_epi8,
+            _mm512_set1_epi8, _mm512_set1_epi64, _mm512_storeu_si512,
+        };
+
+        _mm_prefetch::<_MM_HINT_T0>(unsafe { text.as_ptr().add(offset + 4096) } as *const i8);
+        if remaining <= MARGIN {
+            let consumed = batch_buffer[batch_size - 1] + 1;
+            return (batch_size, consumed);
+        }
+
+        // read the next byte vector
+        let byte_vec: __m512i =
+            unsafe { _mm512_loadu_si512(text.as_ptr().add(offset) as *const __m512i) };
+        let line_breaks: __m512i = _mm512_set1_epi8(b'\n' as i8);
+        let mut line_breaks_mask = _mm512_cmpeq_epi8_mask(byte_vec, line_breaks);
+        if remaining <= MARGIN + SIMD_SIZE {
+            cold_path(); // only happens at the end of the batch
+            // mask bytes that belong to the next chunk
+            line_breaks_mask = unsafe { _bzhi_u64(line_breaks_mask, (remaining - MARGIN) as u32) };
+        }
+        let mut line_breaks_positions = _mm512_maskz_compress_epi8(line_breaks_mask, iota_vec);
+        let line_breaks_offsets = _mm512_add_epi64(
+            _mm512_cvtepu8_epi64(_mm512_castsi512_si128(line_breaks_positions)), // 8 × u8 → 8 × u64
+            _mm512_set1_epi64(offset as i64),
+        );
+        unsafe {
+            _mm512_storeu_si512(
+                batch_buffer.as_mut_ptr().add(batch_size) as *mut _,
+                line_breaks_offsets,
+            )
+        };
+        let found = line_breaks_mask.count_ones() as usize;
+        debug_assert!(found <= 8);
+        batch_size += found;
+        offset += SIMD_SIZE;
+        remaining -= SIMD_SIZE;
+    }
+    let consumed = batch_buffer[batch_size - 1] + 1;
+    (batch_size, consumed)
+}
+
+#[cfg(all(target_feature = "avx2", not(target_feature = "avx512bw")))]
 #[target_feature(enable = "avx2")]
 fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (usize, usize) {
     let mut offset = 0usize;
@@ -111,7 +187,7 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
         // process up to 4 lines in each iteration, its impossible to have more than 4
         for i in 0..4 {
             batch_buffer[batch_size + i] = offset + line_breaks_mask.trailing_zeros() as usize;
-            line_breaks_mask &= line_breaks_mask - 1 // should compile to a single blsrl instruction
+            line_breaks_mask &= line_breaks_mask.wrapping_sub(1); // should compile to a single blsrl instruction
         }
         batch_size += found;
         offset += SIMD_SIZE;
@@ -120,7 +196,6 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
     let consumed = batch_buffer[batch_size - 1] + 1;
     (batch_size, consumed)
 }
-
 fn process_batch(
     text: &[u8],
     batch: &[usize; BATCH_BUFFER_SIZE],
@@ -143,8 +218,12 @@ fn process_chunk(chunk: &[u8], summary: &mut MyPHFMap) {
     let mut batch = [0usize; BATCH_BUFFER_SIZE];
     let mut remainder = chunk;
     while remainder.len() != MARGIN {
+        llvm_mca_begin!("fill");
         let (batch_size, consumed) = unsafe { fill_batch(remainder, &mut batch) };
+        llvm_mca_end!("fill");
+        llvm_mca_begin!("process");
         process_batch(remainder, &batch, batch_size, summary);
+        llvm_mca_end!("process");
         remainder = &remainder[consumed..];
     }
 }
