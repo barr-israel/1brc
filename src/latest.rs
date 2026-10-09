@@ -30,7 +30,6 @@ const SIMD_SIZE: usize = 32;
 const SIMD_SIZE: usize = 64;
 // oversized so we can finish the current iterations without worrying about overflow
 const BATCH_BUFFER_SIZE: usize = LINES_PER_BATCH + SIMD_SIZE;
-const MARGIN: usize = MARGIN;
 
 fn parse_measurement_from_end(text: &[u8]) -> (usize, i32) {
     static LUT: [i16; 1 << 12] = {
@@ -70,7 +69,7 @@ fn parse_measurement_from_end(text: &[u8]) -> (usize, i32) {
 }
 
 fn map_file(file: &File) -> Result<&[u8], Error> {
-    let mapped_length = file.metadata().unwrap().len() as usize + MARGIN;
+    let mapped_length = file.metadata().unwrap().len() as usize + SIMD_SIZE;
     match unsafe {
         libc::mmap(
             std::ptr::null_mut(),
@@ -121,7 +120,7 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
         };
 
         _mm_prefetch::<_MM_HINT_T0>(unsafe { text.as_ptr().add(offset + 4096) } as *const i8);
-        if remaining <= MARGIN {
+        if remaining <= SIMD_SIZE {
             let consumed = batch_buffer[batch_size - 1] + 1;
             return (batch_size, consumed);
         }
@@ -131,10 +130,11 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
             unsafe { _mm512_loadu_si512(text.as_ptr().add(offset) as *const __m512i) };
         let line_breaks: __m512i = _mm512_set1_epi8(b'\n' as i8);
         let mut line_breaks_mask = _mm512_cmpeq_epi8_mask(byte_vec, line_breaks);
-        if remaining <= MARGIN + SIMD_SIZE {
+        if remaining <= SIMD_SIZE * 2 {
             cold_path(); // only happens at the end of the batch
             // mask bytes that belong to the next chunk
-            line_breaks_mask = unsafe { _bzhi_u64(line_breaks_mask, (remaining - MARGIN) as u32) };
+            line_breaks_mask =
+                unsafe { _bzhi_u64(line_breaks_mask, (remaining - SIMD_SIZE) as u32) };
         }
         let mut line_breaks_positions = _mm512_maskz_compress_epi8(line_breaks_mask, iota_vec);
         let line_breaks_offsets = _mm512_add_epi64(
@@ -165,7 +165,7 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
     let mut batch_size = 0;
     while batch_size <= LINES_PER_BATCH {
         _mm_prefetch::<_MM_HINT_T0>(unsafe { text.as_ptr().add(offset + 4096) } as *const i8);
-        if remaining <= MARGIN {
+        if remaining <= SIMD_SIZE {
             let consumed = batch_buffer[batch_size - 1] + 1;
             return (batch_size, consumed);
         }
@@ -176,10 +176,11 @@ fn fill_batch(text: &[u8], batch_buffer: &mut [usize; BATCH_BUFFER_SIZE]) -> (us
         let line_breaks: __m256i = _mm256_set1_epi8(b'\n' as i8);
         let mut line_breaks_mask =
             _mm256_movemask_epi8(_mm256_cmpeq_epi8(byte_vec, line_breaks)) as u32;
-        if remaining <= MARGIN + SIMD_SIZE {
+        if remaining <= SIMD_SIZE * 2 {
             cold_path(); // only happens at the end of the batch
             // mask bytes that belong to the next chunk
-            line_breaks_mask = unsafe { _bzhi_u32(line_breaks_mask, (remaining - MARGIN) as u32) };
+            line_breaks_mask =
+                unsafe { _bzhi_u32(line_breaks_mask, (remaining - SIMD_SIZE) as u32) };
         }
         let found = line_breaks_mask.count_ones() as usize;
         debug_assert!(found <= 4, "more than 4 line ends in one 32-byte lane");
@@ -216,7 +217,7 @@ fn process_batch(
 fn process_chunk(chunk: &[u8], summary: &mut MyPHFMap) {
     let mut batch = [0usize; BATCH_BUFFER_SIZE];
     let mut remainder = chunk;
-    while remainder.len() != MARGIN {
+    while remainder.len() != SIMD_SIZE {
         llvm_mca_begin!("fill");
         let (batch_size, consumed) = unsafe { fill_batch(remainder, &mut batch) };
         llvm_mca_end!("fill");
@@ -244,7 +245,7 @@ pub fn run(mut writer: PipeWriter) {
     let mut chunks = Vec::with_capacity(chunk_count);
     for _ in 0..(chunk_count - 1) {
         let chunk_end = memrchr(b'\n', &remainder[..ideal_chunk_size]).unwrap();
-        let chunk: &[u8] = &remainder[..chunk_end + MARGIN + 1];
+        let chunk: &[u8] = &remainder[..chunk_end + SIMD_SIZE + 1];
         remainder = &remainder[chunk_end + 1..];
         chunks.push(chunk);
     }
