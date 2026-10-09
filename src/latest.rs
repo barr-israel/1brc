@@ -19,7 +19,18 @@ use memchr::memchr;
 
 use crate::my_phf2::MyPHFMap;
 
-const MARGIN: usize = 32;
+const LINES_PER_BATCH: usize = 256;
+#[cfg(all(target_feature = "avx2", not(target_feature = "avx512bw")))]
+const SIMD_SIZE: usize = 32;
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi2"
+))]
+const SIMD_SIZE: usize = 64;
+// oversized so we can finish the current iterations without worrying about overflow
+const BATCH_BUFFER_SIZE: usize = LINES_PER_BATCH + SIMD_SIZE;
+const MARGIN: usize = MARGIN;
 
 fn parse_measurement_from_end(text: &[u8]) -> (usize, i32) {
     static LUT: [i16; 1 << 12] = {
@@ -77,18 +88,6 @@ fn map_file(file: &File) -> Result<&[u8], Error> {
         }
     }
 }
-
-const LINES_PER_BATCH: usize = 256;
-#[cfg(all(target_feature = "avx2", not(target_feature = "avx512bw")))]
-const SIMD_SIZE: usize = 32;
-#[cfg(all(
-    target_feature = "avx512f",
-    target_feature = "avx512bw",
-    target_feature = "avx512vbmi2"
-))]
-const SIMD_SIZE: usize = 64;
-// oversized so we can finish the current iterations without worrying about overflow
-const BATCH_BUFFER_SIZE: usize = LINES_PER_BATCH + SIMD_SIZE;
 
 #[cfg(all(
     target_feature = "avx512f",
